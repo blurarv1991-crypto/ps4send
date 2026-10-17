@@ -4,39 +4,7 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
     <path
-        android:fillColor="#0B2A6B"
+        android:fillColor="#FFFFFF"
         android:pathData="M0,0 L108,0 L108,108 L0,108 Z" />
-
-    <!-- Triángulo (arriba) -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#3DDC97"
-        android:strokeWidth="2"
-        android:strokeLineJoin="round"
-        android:pathData="M54,23 L59.5,32 L48.5,32 Z" />
-
-    <!-- Círculo (derecha) -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FF5A5F"
-        android:strokeWidth="2"
-        android:pathData="M75,54 A5,5 0 1,0 85,54 A5,5 0 1,0 75,54" />
-
-    <!-- Equis (abajo) -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#7FB2FF"
-        android:strokeWidth="2"
-        android:strokeLineCap="round"
-        android:pathData="M49,75 L59,85 M59,75 L49,85" />
-
-    <!-- Cuadrado (izquierda) -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FF8FC7"
-        android:strokeWidth="2"
-        android:strokeLineJoin="round"
-        android:pathData="M23,49 L33,49 L33,59 L23,59 Z" />
 </vector>
