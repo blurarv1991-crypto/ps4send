@@ -15,6 +15,26 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("fixed") {
+            val path = System.getenv("KEYSTORE_PATH")
+            if (path != null) {
+                storeFile = file(path)
+                storePassword = "ps4send123"
+                keyAlias = "ps4send"
+                keyPassword = "ps4send123"
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            if (System.getenv("KEYSTORE_PATH") != null) {
+                signingConfig = signingConfigs.getByName("fixed")
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
