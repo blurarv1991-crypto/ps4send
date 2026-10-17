@@ -2,6 +2,9 @@ package com.ps4send.app
 
 import android.app.Activity
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
@@ -18,6 +21,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
@@ -38,7 +42,10 @@ class MainActivity : Activity() {
     private val PS4_PORT = 12800
     private val HTTP_PORT = 8000
 
+    private lateinit var root: LinearLayout
     private lateinit var ipField: EditText
+    private lateinit var modePkgBtn: Button
+    private lateinit var modeFtpBtn: Button
     private lateinit var pkgSection: LinearLayout
     private lateinit var ftpSection: LinearLayout
     private lateinit var pkgLabel: TextView
@@ -50,6 +57,9 @@ class MainActivity : Activity() {
     private lateinit var dirField: EditText
     private lateinit var logView: TextView
     private lateinit var logScroll: ScrollView
+
+    private val texts = mutableListOf<TextView>()
+    private val buttons = mutableListOf<Button>()
 
     private var pkgUri: Uri? = null
     private var pkgSize = -1L
@@ -68,6 +78,13 @@ class MainActivity : Activity() {
     private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
         setOnClickListener { onClick() }
+        buttons.add(this)
+    }
+
+    private fun label(t: String, size: Float = 14f) = TextView(this).apply {
+        text = t
+        textSize = size
+        texts.add(this)
     }
 
     private fun field(h: String, value: String = "", type: Int = InputType.TYPE_CLASS_TEXT) =
@@ -75,24 +92,84 @@ class MainActivity : Activity() {
             hint = h
             inputType = type
             setText(value)
+            texts.add(this)
         }
+
+    @Suppress("DEPRECATION")
+    private fun applyTheme(isDark: Boolean) {
+        val bg = if (isDark) Color.BLACK else Color.WHITE
+        val fg = if (isDark) Color.parseColor("#E6E6E6") else Color.parseColor("#111111")
+        val hint = if (isDark) Color.parseColor("#8A8A8A") else Color.parseColor("#757575")
+        val btnBg = if (isDark) Color.parseColor("#1E1E1E") else Color.parseColor("#E0E0E0")
+        val btnFg = if (isDark) Color.WHITE else Color.parseColor("#111111")
+        root.setBackgroundColor(bg)
+        for (t in texts) {
+            t.setTextColor(fg)
+            t.setHintTextColor(hint)
+        }
+        for (b in buttons) {
+            b.setTextColor(btnFg)
+            b.backgroundTintList = ColorStateList.valueOf(btnBg)
+        }
+        logView.setTextColor(if (isDark) Color.parseColor("#B0B0B0") else Color.parseColor("#333333"))
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
+        var flags = window.decorView.systemUiVisibility
+        if (isDark) {
+            flags = flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+        } else {
+            flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
+        window.decorView.systemUiVisibility = flags
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val initialDark = prefs.getBoolean("dark", systemDark)
+
+        val darkSwitch = Switch(this).apply {
+            text = "Modo oscuro (OLED)"
+            isChecked = initialDark
+            texts.add(this)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean("dark", checked).apply()
+                applyTheme(checked)
+            }
+        }
+
         ipField = EditText(this).apply {
             hint = "IP de la PS4 (ej: 192.168.1.14)"
             keyListener = DigitsKeyListener.getInstance("0123456789.")
             setText(prefs.getString("ip", ""))
+            texts.add(this)
         }
 
+        modePkgBtn = button("Instalar PKG") { showMode(false) }
+        modeFtpBtn = button("Enviar por FTP") { showMode(true) }
         val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        modeRow.addView(button("Instalar PKG") { showMode(false) }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        modeRow.addView(button("Enviar por FTP") { showMode(true) }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        modeRow.addView(modePkgBtn, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        modeRow.addView(modeFtpBtn, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
 
-        pkgLabel = TextView(this).apply { text = "Ningún archivo elegido" }
+        val stepsPkg = "Paso 1: Carga el jailbreak y GoldHEN en la PS4.\n" +
+            "Paso 2: Abre Remote Package Installer y déjala en pantalla.\n" +
+            "Paso 3: Conecta móvil y PS4 a la misma Wi-Fi y escribe la IP de la PS4.\n" +
+            "Paso 4: Elige el .pkg y toca \"Enviar a la PS4\".\n" +
+            "Paso 5: Deja esta pantalla encendida hasta que la PS4 termine."
+
+        val stepsFtp = "Paso 1: Carga el jailbreak y GoldHEN en la PS4.\n" +
+            "Paso 2: Activa el servidor FTP en la PS4 y anota el puerto (suele ser 2121).\n" +
+            "Paso 3: Misma Wi-Fi: escribe la IP y revisa puerto, usuario y carpeta.\n" +
+            "Paso 4: Elige el archivo y toca \"Subir por FTP\".\n" +
+            "Paso 5: Espera al 100 % y comprueba que aparece en la carpeta de destino."
+
+        pkgLabel = label("Ningún archivo elegido")
         pkgSection = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        pkgSection.addView(label("Cómo instalar un PKG", 16f).apply { typeface = Typeface.DEFAULT_BOLD }, wrap())
+        pkgSection.addView(label(stepsPkg, 13f), wrap())
         pkgSection.addView(button("1. Elegir archivo .pkg") { pick(PICK_PKG) }, wrap())
         pkgSection.addView(pkgLabel, wrap())
         pkgSection.addView(button("2. Enviar a la PS4") { sendPkg() }, wrap())
@@ -108,14 +185,16 @@ class MainActivity : Activity() {
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         )
         dirField = field("Carpeta de destino en la PS4", prefs.getString("dir", "/data/") ?: "/data/")
-        ftpLabel = TextView(this).apply { text = "Ningún archivo elegido" }
-        progressView = TextView(this)
+        ftpLabel = label("Ningún archivo elegido")
+        progressView = label("", 13f)
 
         val authRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         authRow.addView(portField, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         authRow.addView(userField, LinearLayout.LayoutParams(0, WRAP_CONTENT, 2f))
 
         ftpSection = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        ftpSection.addView(label("Cómo enviar por FTP", 16f).apply { typeface = Typeface.DEFAULT_BOLD }, wrap())
+        ftpSection.addView(label(stepsFtp, 13f), wrap())
         ftpSection.addView(authRow, wrap())
         ftpSection.addView(passField, wrap())
         ftpSection.addView(dirField, wrap())
@@ -126,6 +205,7 @@ class MainActivity : Activity() {
         ftpSection.visibility = View.GONE
 
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        form.addView(darkSwitch, wrap())
         form.addView(ipField, wrap())
         form.addView(modeRow, wrap())
         form.addView(pkgSection, wrap())
@@ -138,13 +218,16 @@ class MainActivity : Activity() {
         }
         logScroll = ScrollView(this).apply { addView(logView) }
 
-        val root = LinearLayout(this).apply {
+        root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(24), dp(16), dp(8))
         }
         root.addView(formScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 3f))
         root.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 2f))
         setContentView(root)
+
+        applyTheme(initialDark)
+        showMode(false)
 
         log("Móvil y PS4 en el mismo Wi-Fi. Para instalar PKG: GoldHEN y Remote Package Installer abierta. Para FTP: servidor FTP activo en la PS4.")
     }
@@ -157,6 +240,8 @@ class MainActivity : Activity() {
     private fun showMode(ftp: Boolean) {
         pkgSection.visibility = if (ftp) View.GONE else View.VISIBLE
         ftpSection.visibility = if (ftp) View.VISIBLE else View.GONE
+        modePkgBtn.alpha = if (ftp) 0.5f else 1f
+        modeFtpBtn.alpha = if (ftp) 1f else 0.5f
     }
 
     private fun log(msg: String) {
@@ -467,6 +552,4 @@ class MainActivity : Activity() {
             }
         }
     }
-}      
-      
-  
+}
