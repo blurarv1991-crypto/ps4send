@@ -222,8 +222,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(24), dp(16), dp(8))
         }
-        root.addView(formScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 3f))
-        root.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 2f))
+        root.addView(formScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        root.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, dp(110)))
         setContentView(root)
 
         applyTheme(initialDark)
