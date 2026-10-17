@@ -19,6 +19,15 @@ jobs:
         with:
           gradle-version: 8.9
 
+      - name: Preparar llave de firma
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ps4send.jks"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/ps4send.jks" >> "$GITHUB_ENV"
+          fi
+
       - name: Compilar
         run: gradle assembleDebug --no-daemon
 
