@@ -521,5 +521,485 @@ class MainActivity : Activity() {
                 server = ss
                 val size = pkgSize
                 thread { acceptLoop(ss, uri, size) }
+                                val myIp = DatagramSocket().use {
+                    it.connect(InetAddress.getByName(host), PS4_PORT)
+                    it.localAddress.hostAddress
+                }
+                val url = "http://$myIp:$HTTP_PORT/paquete.pkg"
+                log("Sirviendo: $url")
 
+                val conn = URL("http://$host:$PS4_PORT/api/install").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 8000
+                conn.readTimeout = 15000
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use {
+                    it.write("""{"type":"direct","packages":["$url"]}""".toByteArray())
+                }
+                val resp = try {
+                    conn.inputStream.bufferedReader().readText()
+                } catch (e: Exception) {
+                    conn.errorStream?.bufferedReader()?.readText() ?: e.toString()
+                }
+                log("Respuesta de la PS4: $resp")
+                if (resp.contains("success", ignoreCase = true)) {
+                    log("Orden enviada. Deja esta pantalla abierta hasta que la PS4 termine.")
+                    monitorPkg(ss, size)
+                } else {
+                    stopServer()
+                    setProgress("La PS4 rechazó la orden")
+                    setTransfer(TransferView.ERROR)
+                }
+            } catch (e: Exception) {
+                log("Error: $e")
+                setProgress("Error al enviar")
+                setTransfer(TransferView.ERROR)
+            }
+        }
+    }
+
+    private fun monitorPkg(ss: ServerSocket, size: Long) {
+        thread {
+            val t0 = System.currentTimeMillis()
+            var lastB = 0L
+            var lastT = t0
+            var lastLog = -10
+            while (!ss.isClosed) {
+                try {
+                    Thread.sleep(500)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                val b = served.get()
+                val now = System.currentTimeMillis()
+                val pct = if (size > 0) minOf(100L, b * 100 / size).toInt() else 0
+                val speed = mbps(b - lastB, now - lastT)
+                lastB = b
+                lastT = now
+                setProgress("La PS4 descarga: ~$pct% · $speed")
+                if (pct >= lastLog + 10) {
+                    lastLog = pct - pct % 10
+                    log("~$pct% · $speed")
+                }
+                if (b >= size) {
+                    val avg = mbps(b, now - t0)
+                    setProgress("Descarga completa · promedio $avg")
+                    log("La PS4 recibió todo el archivo (promedio $avg).")
+                    setTransfer(TransferView.SUCCESS)
+                    break
+                }
+            }
+        }
+    }
+
+    private fun acceptLoop(ss: ServerSocket, uri: Uri, size: Long) {
+        while (!ss.isClosed) {
+            val c = try {
+                ss.accept()
+            } catch (e: Exception) {
+                break
+            }
+            thread { handle(c, uri, size) }
+        }
+    }
+
+    private fun handle(c: Socket, uri: Uri, size: Long) {
+        try {
+            c.use { s ->
+                s.soTimeout = 30000
+                val reader = s.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+                val reqLine = reader.readLine() ?: return
+                var range: String? = null
+                while (true) {
+                    val l = reader.readLine() ?: break
+                    if (l.isEmpty()) break
+                    if (l.startsWith("Range:", ignoreCase = true)) range = l.substring(6).trim()
+                }
+                val out = s.getOutputStream()
+
+                if (!reqLine.contains("/paquete.pkg")) {
+                    out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                    return
+                }
+
+                var start = 0L
+                var end = size - 1
+                var partial = false
+                val m = range?.let { Regex("bytes=(\\d*)-(\\d*)").find(it) }
+                if (m != null && (m.groupValues[1].isNotEmpty() || m.groupValues[2].isNotEmpty())) {
+                    if (m.groupValues[1].isEmpty()) {
+                        start = maxOf(0L, size - m.groupValues[2].toLong())
+                    } else {
+                        start = m.groupValues[1].toLong()
+                        if (m.groupValues[2].isNotEmpty()) end = minOf(m.groupValues[2].toLong(), size - 1)
+                    }
+                    if (start > end || start >= size) {
+                        out.write("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$size\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                        return
+                    }
+                    partial = true
+                }
+
+                val length = end - start + 1
+                val head = StringBuilder()
+                head.append(if (partial) "HTTP/1.1 206 Partial Content\r\n" else "HTTP/1.1 200 OK\r\n")
+                head.append("Content-Type: application/octet-stream\r\n")
+                head.append("Accept-Ranges: bytes\r\n")
+                head.append("Content-Length: $length\r\n")
+                if (partial) head.append("Content-Range: bytes $start-$end/$size\r\n")
+                head.append("Connection: close\r\n\r\n")
+                out.write(head.toString().toByteArray())
+
+                if (reqLine.startsWith("HEAD")) return
+
+                contentResolver.openInputStream(uri)?.use { ins ->
+                    var toSkip = start
+                    while (toSkip > 0) {
+                        val n = ins.skip(toSkip)
+                        if (n > 0) {
+                            toSkip -= n
+                        } else {
+                            if (ins.read() < 0) break
+                            toSkip--
+                        }
+                    }
+                    val buf = ByteArray(256 * 1024)
+                    var left = length
+                    while (left > 0) {
+                        val n = ins.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        served.addAndGet(n.toLong())
+                        left -= n
+                    }
+                    out.flush()
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun ftpParams(): FtpParams? {
+        val host = ip.trim()
+        if (host.isEmpty()) {
+            log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
+            return null
+        }
+        val port = portField.text.toString().toIntOrNull() ?: 2121
+        val user = userField.text.toString().trim().ifEmpty { "anonymous" }
+        return FtpParams(host, port, user, passField.text.toString())
+    }
+
+    private fun <T> ftpSession(p: FtpParams, block: (FTPClient) -> T): T {
+        val ftp = FTPClient()
+        try {
+            ftp.connectTimeout = 8000
+            ftp.defaultTimeout = 30000
+            ftp.connect(p.ip, p.port)
+            if (!ftp.login(p.user, p.pass)) {
+                throw Exception("Login rechazado: ${ftp.replyString.trim()}")
+            }
+            ftp.enterLocalPassiveMode()
+            ftp.setFileType(FTP.BINARY_FILE_TYPE)
+            return block(ftp)
+        } finally {
+            try {
+                if (ftp.isConnected) {
+                    ftp.logout()
+                    ftp.disconnect()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun normalizePath(raw: String): String {
+        var s = raw.trim().ifEmpty { "/" }
+        if (!s.startsWith("/")) s = "/$s"
+        while (s.length > 1 && s.endsWith("/")) s = s.dropLast(1)
+        return s
+    }
+
+    private fun parentOf(p: String): String =
+        if (p == "/") "/" else p.substringBeforeLast('/').ifEmpty { "/" }
+
+    private fun childPath(p: String, name: String): String =
+        if (p == "/") "/$name" else "$p/$name"
+
+    private fun showBrowser() {
+        val p = ftpParams() ?: return
+        var path = normalizePath(dirField.text.toString())
+        val entries = mutableListOf<FtpEntry>()
+        val labels = mutableListOf<String>()
+
+        val pathText = TextView(this).apply {
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Ui.TEXT)
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+        }
+        val statusLine = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Ui.MUTED)
+            setPadding(dp(20), 0, dp(20), dp(4))
+        }
+        val fileAdapter = object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = super.getView(position, convertView, parent) as TextView
+                v.setTextColor(Ui.TEXT)
+                v.textSize = 15f
+                return v
+            }
+        }
+        val list = ListView(this)
+        list.adapter = fileAdapter
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(pathText, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        box.addView(statusLine, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        box.addView(list, LinearLayout.LayoutParams(MATCH_PARENT, dp(320)))
+
+        fun load(target: String, fallback: Boolean) {
+            statusLine.text = "Cargando..."
+            thread {
+                try {
+                    val files = ftpSession(p) { ftp ->
+                        if (target != "/" && !ftp.changeWorkingDirectory(target)) {
+                            throw Exception("No se puede abrir $target")
+                        }
+                        ftp.listFiles(target).filterNotNull().filter { it.name != "." && it.name != ".." }
+                    }
+                    val sorted = files.sortedWith(compareBy<FTPFile>({ !it.isDirectory }, { it.name.lowercase() }))
+                    ui.post {
+                        path = target
+                        entries.clear()
+                        labels.clear()
+                        if (target != "/") entries.add(FtpEntry("..", true, 0L, true))
+                        for (f in sorted) entries.add(FtpEntry(f.name, f.isDirectory, f.size))
+                        for (e in entries) {
+                            labels.add(
+                                when {
+                                    e.parent -> ".. (subir un nivel)"
+                                    e.dir -> "📁 ${e.name}"
+                                    else -> "${e.name}  (${sizeText(e.size)})"
+                                }
+                            )
+                        }
+                        fileAdapter.notifyDataSetChanged()
+                        pathText.text = target
+                        statusLine.text = if (sorted.isEmpty()) "Carpeta vacía" else "${sorted.size} elementos"
+                    }
+                } catch (e: Exception) {
+                    if (fallback && target != "/") {
+                        load("/", false)
+                    } else {
+                        ui.post { statusLine.text = "Error: $e" }
+                    }
+                }
+            }
+        }
+
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val e = entries[pos]
+            when {
+                e.parent -> load(parentOf(path), false)
+                e.dir -> load(childPath(path, e.name), false)
+                else -> Toast.makeText(this, "Mantén pulsado para eliminar", Toast.LENGTH_SHORT).show()
+            }
+        }
+        list.setOnItemLongClickListener { _, _, pos, _ ->
+            val e = entries[pos]
+            if (!e.parent) confirmDelete(p, path, e) { load(path, false) }
+            true
+        }
+
+        val dialog = AlertDialog.Builder(this, dialogTheme())
+            .setTitle("Carpetas de la PS4")
+            .setView(box)
+            .setPositiveButton("Usar esta carpeta") { _, _ ->
+                dirField.setText(if (path.endsWith("/")) path else "$path/")
+            }
+            .setNeutralButton("Carpeta nueva", null)
+            .setNegativeButton("Cerrar", null)
+            .create()
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            askNewFolder(p, path) { load(path, false) }
+        }
+        load(path, true)
+    }
+
+    private fun confirmDelete(p: FtpParams, dir: String, e: FtpEntry, done: () -> Unit) {
+        val full = childPath(dir, e.name)
+        val safe = full.startsWith("/data/") || full.startsWith("/mnt/usb")
+        val msg = (if (e.dir) "Carpeta (solo se borra si está vacía):\n$full" else "Archivo:\n$full") +
+            (if (safe) "" else "\n\nCuidado: esta ruta no es /data ni un USB. Borrar aquí puede dañar la consola.")
+        AlertDialog.Builder(this, dialogTheme())
+            .setTitle("¿Eliminar?")
+            .setMessage(msg)
+            .setPositiveButton("Eliminar") { _, _ ->
+                thread {
+                    try {
+                        val ok = ftpSession(p) { ftp ->
+                            if (e.dir) ftp.removeDirectory(full) else ftp.deleteFile(full)
+                        }
+                        if (ok) {
+                            log("Eliminado: $full")
+                        } else {
+                            log("No se pudo eliminar $full (¿carpeta con contenido o sin permiso?)")
+                        }
+                    } catch (ex: Exception) {
+                        log("Error al eliminar: $ex")
+                    }
+                    ui.post { done() }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun askNewFolder(p: FtpParams, dir: String, done: () -> Unit) {
+        val input = field("Nombre de la carpeta")
+        val holder = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        holder.addView(input, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        AlertDialog.Builder(this, dialogTheme())
+            .setTitle("Carpeta nueva en $dir")
+            .setView(holder)
+            .setPositiveButton("Crear") { _, _ ->
+                val name = input.text.toString().trim().replace("/", "")
+                if (name.isNotEmpty()) {
+                    thread {
+                        try {
+                            val target = childPath(dir, name)
+                            val ok = ftpSession(p) { ftp -> ftp.makeDirectory(target) }
+                            log(if (ok) "Carpeta creada: $target" else "No se pudo crear la carpeta $target")
+                        } catch (ex: Exception) {
+                            log("Error al crear carpeta: $ex")
+                        }
+                        ui.post { done() }
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun ensureDir(ftp: FTPClient, path: String): Boolean {
+        if (ftp.changeWorkingDirectory(path)) return true
+        var cur = if (path.startsWith("/")) "/" else ""
+        for (part in path.split("/").filter { it.isNotEmpty() }) {
+            cur += "$part/"
+            if (!ftp.changeWorkingDirectory(cur)) {
+                ftp.makeDirectory(cur)
+                if (!ftp.changeWorkingDirectory(cur)) return false
+            }
+        }
+        return true
+    }
+
+    private fun uploadFtp() {
+        val uri = ftpUri
+        if (uri == null) {
+            log("Primero elige un archivo.")
+            return
+        }
+        val p = ftpParams() ?: return
+        var dir = dirField.text.toString().trim().ifEmpty { "/data/" }
+        if (!dir.endsWith("/")) dir += "/"
+        val name = ftpName
+        val size = ftpSize
+        prefs.edit()
+            .putString("port", p.port.toString())
+            .putString("user", p.user)
+            .putString("dir", dir)
+            .apply()
+        transfer.setMode(TransferView.SENDING)
+        setProgress("Conectando...")
+
+        thread {
+            val ftp = FTPClient()
+            try {
+                ftp.connectTimeout = 8000
+                ftp.defaultTimeout = 30000
+                log("Conectando a ${p.ip}:${p.port} ...")
+                ftp.connect(p.ip, p.port)
+                if (!ftp.login(p.user, p.pass)) {
+                    log("Login rechazado: ${ftp.replyString.trim()}")
+                    setProgress("Login rechazado")
+                    setTransfer(TransferView.ERROR)
+                    return@thread
+                }
+                ftp.enterLocalPassiveMode()
+                ftp.setFileType(FTP.BINARY_FILE_TYPE)
+                ftp.bufferSize = 256 * 1024
+                if (!ensureDir(ftp, dir)) {
+                    log("No pude entrar ni crear la carpeta $dir")
+                    setProgress("Carpeta no disponible")
+                    setTransfer(TransferView.ERROR)
+                    return@thread
+                }
+                val raw = contentResolver.openInputStream(uri)
+                if (raw == null) {
+                    log("No pude abrir el archivo.")
+                    setProgress("No se pudo abrir el archivo")
+                    setTransfer(TransferView.ERROR)
+                    return@thread
+                }
+                val startMs = System.currentTimeMillis()
+                val ins = object : FilterInputStream(raw) {
+                    var total = 0L
+                    var lastLogPct = -10
+                    var lastMs = startMs
+                    var lastBytes = 0L
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        val n = super.read(b, off, len)
+                        if (n > 0) {
+                            total += n
+                            val now = System.currentTimeMillis()
+                            if (now - lastMs >= 500) {
+                                val speed = mbps(total - lastBytes, now - lastMs)
+                                val pct = if (size > 0) (total * 100 / size).toInt() else 0
+                                setProgress("Subiendo $name: $pct% · $speed")
+                                if (pct >= lastLogPct + 10) {
+                                    lastLogPct = pct - pct % 10
+                                    log("$pct% · $speed")
+                                }
+                                lastMs = now
+                                lastBytes = total
+                            }
+                        }
+                        return n
+                    }
+                }
+                val ok = ins.use { ftp.storeFile(name, it) }
+                val ms = System.currentTimeMillis() - startMs
+                if (ok) {
+                    val avg = mbps(maxOf(size, 0L), ms)
+                    setProgress("Listo: $name · promedio $avg")
+                    log("Subido a $dir$name en ${ms / 1000} s (promedio $avg)")
+                    setTransfer(TransferView.SUCCESS)
+                } else {
+                    log("Falló la subida: ${ftp.replyString.trim()}")
+                    setProgress("Falló la subida")
+                    setTransfer(TransferView.ERROR)
+                }
+            } catch (e: Exception) {
+                log("Error FTP: $e")
+                setProgress("Error FTP")
+                setTransfer(TransferView.ERROR)
+            } finally {
+                try {
+                    if (ftp.isConnected) {
+                        ftp.logout()
+                        ftp.disconnect()
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+}
    
