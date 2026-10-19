@@ -142,8 +142,9 @@ class StatusCard(
     private val onCopy: () -> Unit
 ) {
 
-    @Volatile
+        @Volatile
     var ip: String = ""
+        private set
 
     @Volatile
     var ftpPort: Int = 2121
