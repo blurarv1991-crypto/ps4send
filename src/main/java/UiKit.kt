@@ -113,7 +113,14 @@ class IconView(context: Context, private val kind: Int, private var tint: Int = 
         const val SEND = 5
         const val INFO = 6
         const val CHEVRON_DOWN = 7
-        const val CHEVRON_UP = 8
+                const val CHEVRON_UP = 8
+        const val GEAR = 9
+        const val WIFI = 10
+        const val PLUG = 11
+        const val USER = 12
+        const val LOCK = 13
+        const val CHEVRON_RIGHT = 14
+        const val CLOSE = 15
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -201,10 +208,66 @@ class IconView(context: Context, private val kind: Int, private var tint: Int = 
                 path.lineTo(12f, 15f)
                 path.lineTo(18f, 9f)
             }
-            CHEVRON_UP -> {
+                        CHEVRON_UP -> {
                 path.moveTo(6f, 15f)
                 path.lineTo(12f, 9f)
                 path.lineTo(18f, 15f)
+            }
+            GEAR -> {
+                path.addCircle(12f, 12f, 3f, Path.Direction.CW)
+                path.addCircle(12f, 12f, 6.5f, Path.Direction.CW)
+                for (i in 0 until 8) {
+                    val a = Math.toRadians(i * 45.0)
+                    val ca = Math.cos(a).toFloat()
+                    val sa = Math.sin(a).toFloat()
+                    path.moveTo(12f + 6.5f * ca, 12f + 6.5f * sa)
+                    path.lineTo(12f + 9.5f * ca, 12f + 9.5f * sa)
+                }
+            }
+            WIFI -> {
+                path.addArc(RectF(8f, 15f, 16f, 23f), 225f, 90f)
+                path.addArc(RectF(4f, 11f, 20f, 27f), 225f, 90f)
+                path.addArc(RectF(0f, 7f, 24f, 31f), 225f, 90f)
+                path.moveTo(12f, 19f)
+                path.lineTo(12f, 19.1f)
+            }
+            PLUG -> {
+                path.moveTo(9f, 2f)
+                path.lineTo(9f, 7f)
+                path.moveTo(15f, 2f)
+                path.lineTo(15f, 7f)
+                path.moveTo(6f, 7f)
+                path.lineTo(18f, 7f)
+                path.lineTo(18f, 11f)
+                path.quadTo(18f, 16f, 12f, 16f)
+                path.quadTo(6f, 16f, 6f, 11f)
+                path.close()
+                path.moveTo(12f, 16f)
+                path.lineTo(12f, 22f)
+            }
+            USER -> {
+                path.addCircle(12f, 8f, 4f, Path.Direction.CW)
+                path.moveTo(4f, 21f)
+                path.quadTo(4f, 14f, 12f, 14f)
+                path.quadTo(20f, 14f, 20f, 21f)
+            }
+            LOCK -> {
+                path.addRoundRect(RectF(5f, 11f, 19f, 21f), 2f, 2f, Path.Direction.CW)
+                path.moveTo(8f, 11f)
+                path.lineTo(8f, 8f)
+                path.cubicTo(8f, 3f, 16f, 3f, 16f, 8f)
+                path.lineTo(16f, 11f)
+            }
+            CHEVRON_RIGHT -> {
+                path.moveTo(9f, 6f)
+                path.lineTo(15f, 12f)
+                path.lineTo(9f, 18f)
+            }
+            CLOSE -> {
+                path.moveTo(6f, 6f)
+                path.lineTo(18f, 18f)
+                path.moveTo(18f, 6f)
+                path.lineTo(6f, 18f)
             }
         }
     }
