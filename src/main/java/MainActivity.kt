@@ -469,7 +469,26 @@ class MainActivity : Activity() {
         }
     }
 
-    
+    private fun copyIp() {
+        val ip = statusCard.ip
+        if (ip.isEmpty()) {
+            Toast.makeText(this, "Escribe primero la IP", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("IP", ip))
+        Toast.makeText(this, "IP copiada", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun ftpParams(): FtpParams? {
+        val host = statusCard.ip.trim()
+        if (host.isEmpty()) {
+            log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
+            return null
+        }
+        return FtpParams(host, ftpPortV, ftpUserV.ifEmpty { "anonymous" }, ftpPassV)
+    }
+
     private fun connectFtp() {
         val p = ftpParams() ?: return
         progressView.text = "Conectando..."
