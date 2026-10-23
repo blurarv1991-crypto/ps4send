@@ -596,7 +596,7 @@ private fun deleteRemote(h: HistoryItem) {
             .show()
     }
 
-    private fun pick(code: Int) {
+    private fun pickOld(code: Int) {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
@@ -621,7 +621,7 @@ private fun deleteRemote(h: HistoryItem) {
         return Pair(name, size)
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    private fun onActivityResultOld(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK) return
         val uri = data?.data ?: return
