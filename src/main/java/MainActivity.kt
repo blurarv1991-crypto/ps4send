@@ -78,6 +78,183 @@ class MainActivity : Activity() {
     private var ftpUserV = "anonymous"
     private var ftpPassV = ""
     private var ftpDirV = "/data/"
+    class QItem(val uri: Uri, val name: String, val size: Long)
+
+private var pkgQ = listOf<QItem>()
+private var ftpQ = listOf<QItem>()
+private var qIndex = 0
+private var curMode = "PKG"
+private var curName = ""
+private var curUri = ""
+private var curDest = ""
+private var runHost = ""
+private var runDir = "/data/"
+private var runParams: FtpParams? = null
+private var lastNotif = 0L
+private var qStop = false
+private lateinit var btnScan: UiBtn
+private lateinit var btnHist: UiBtn
+private val dlgTheme = android.R.style.Theme_DeviceDefault_Dialog_Alert
+
+private fun qSize() = if (curMode == "PKG") pkgQ.size else ftpQ.size
+
+private fun pfx() = if (qSize() > 1) "(${qIndex + 1}/${qSize()}) " else ""
+
+private fun notif(text: String) {
+    try {
+        TransferService.start(this, text)
+    } catch (e: Exception) {
+    }
+}
+
+private fun runPkg() {
+    val q = pkgQ[qIndex]
+    curMode = "PKG"
+    curName = q.name
+    curUri = q.uri.toString()
+    curDest = ""
+    val s = PkgSender(this, httpPort)
+    sender = s
+    begin(pfx() + "Conectando con la PS4...")
+    s.send(runHost, q.uri, q.size, { t -> setProgress(pfx() + t) }, { m -> log(m) }, { c, t -> onDone(c, t) })
+}
+
+private fun runFtpItem() {
+    val q = ftpQ[qIndex]
+    val p = runParams ?: return
+    curMode = "FTP"
+    curName = q.name
+    curUri = q.uri.toString()
+    curDest = runDir + q.name
+    val u = FtpUploader(this)
+    uploader = u
+    begin(pfx() + "Conectando...")
+    u.upload(p, runDir, q.uri, q.name, q.size, { t -> setProgress(pfx() + t) }, { m -> log(m) }, { c, t -> onDone(c, t) })
+}
+
+private fun onDone(code: Int, text: String) {
+    ui.post {
+        val ok = code == TransferView.SUCCESS
+        if (code != TransferView.IDLE) {
+            History.add(this, HistoryItem(curMode, curName, curDest, curUri, System.currentTimeMillis(), ok))
+        }
+        if (ok && qIndex + 1 < qSize()) {
+            qIndex++
+            ui.postDelayed({
+                if (qStop) finish(TransferView.IDLE, "Cancelado")
+                else if (curMode == "PKG") runPkg() else runFtpItem()
+            }, 3000)
+        } else {
+            finish(code, text)
+        }
+    }
+}
+
+private fun scanPs4() {
+    btnScan.label.text = "Buscando..."
+    btnScan.root.isEnabled = false
+    thread {
+        val ips = Scanner.find(12800).ifEmpty { Scanner.find(ftpPortV) }
+        ui.post {
+            btnScan.label.text = "Buscar PS4"
+            btnScan.root.isEnabled = true
+            if (ips.isEmpty()) {
+                log("No encontré la PS4. Abre Remote Package Installer o el FTP y revisa el Wi-Fi.")
+            } else if (ips.size == 1) {
+                prefs.edit().putString("ip", ips[0]).apply()
+                statusCard.setIp(ips[0])
+                log("PS4 encontrada: ${ips[0]}")
+            } else {
+                AlertDialog.Builder(this, dlgTheme)
+                    .setTitle("Elige tu PS4")
+                    .setItems(ips.toTypedArray()) { _, i ->
+                        prefs.edit().putString("ip", ips[i]).apply()
+                        statusCard.setIp(ips[i])
+                    }
+                    .show()
+            }
+        }
+    }
+}
+
+private fun showHistory() {
+    val items = History.all(this)
+    if (items.isEmpty()) {
+        Toast.makeText(this, "Aún no hay envíos", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val fmt = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault())
+    val labels = items.map {
+        (if (it.ok) "✓ " else "✗ ") + it.name + "\n" + it.mode + " · " + fmt.format(java.util.Date(it.time))
+    }
+    AlertDialog.Builder(this, dlgTheme)
+        .setTitle("Historial")
+        .setItems(labels.toTypedArray()) { _, i -> historyActions(items[i]) }
+        .setNeutralButton("Vaciar") { _, _ -> History.clear(this) }
+        .setNegativeButton("Cerrar", null)
+        .show()
+}
+
+private fun historyActions(h: HistoryItem) {
+    val opts = mutableListOf("Repetir envío")
+    if (h.mode == "FTP" && h.dest.isNotEmpty()) opts.add("Borrar de la PS4")
+    opts.add("Quitar del historial")
+    AlertDialog.Builder(this, dlgTheme)
+        .setTitle(h.name)
+        .setItems(opts.toTypedArray()) { _, i ->
+            when (opts[i]) {
+                "Repetir envío" -> repeatSend(h)
+                "Borrar de la PS4" -> deleteRemote(h)
+                else -> History.remove(this, h)
+            }
+        }
+        .show()
+}
+
+private fun repeatSend(h: HistoryItem) {
+    if (busy) {
+        log("Ya hay un envío en curso.")
+        return
+    }
+    try {
+        val uri = Uri.parse(h.uri)
+        val (name, size) = queryInfo(uri)
+        if (size <= 0) {
+            log("El archivo ya no está disponible.")
+            return
+        }
+        if (h.mode == "PKG") {
+            pkgQ = listOf(QItem(uri, name, size))
+            sendPkg()
+        } else {
+            ftpQ = listOf(QItem(uri, name, size))
+            uploadFtp(h.dest.substringBeforeLast('/') + "/")
+        }
+    } catch (e: Exception) {
+        log("No se puede abrir el archivo: ${e.message}")
+    }
+}
+
+private fun deleteRemote(h: HistoryItem) {
+    val p = ftpParams() ?: return
+    AlertDialog.Builder(this, dlgTheme)
+        .setTitle("Borrar de la PS4")
+        .setMessage(h.dest)
+        .setPositiveButton("Borrar") { _, _ ->
+            thread {
+                try {
+                    FtpUtil.session(p) { ftp ->
+                        if (ftp.deleteFile(h.dest)) log("Borrado: ${h.dest}")
+                        else log("No se pudo borrar: ${h.dest}")
+                    }
+                } catch (e: Exception) {
+                    log(Msg.friendly(e))
+                }
+            }
+        }
+        .setNegativeButton("Cancelar", null)
+        .show()
+}
 
     private fun dp(v: Int) = W.dp(this, v)
 
