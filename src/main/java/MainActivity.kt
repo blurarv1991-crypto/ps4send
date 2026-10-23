@@ -272,6 +272,9 @@ private fun deleteRemote(h: HistoryItem) {
     @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 100)
+}
         window.statusBarColor = Ui.BG
         window.navigationBarColor = Ui.BG
         applyKeepOn(prefs.getBoolean("keepOn", true))
@@ -409,6 +412,7 @@ private fun deleteRemote(h: HistoryItem) {
     override fun onDestroy() {
         statusCard.stop()
         cancelAll()
+        TransferService.stop(this)
         super.onDestroy()
     }
 
@@ -442,7 +446,7 @@ private fun deleteRemote(h: HistoryItem) {
         }
     }
 
-    private fun setProgress(msg: String) {
+    private fun setProgressOld(msg: String) {
         ui.post { progressView.text = msg }
     }
 
@@ -453,7 +457,7 @@ private fun deleteRemote(h: HistoryItem) {
         btnCancelFtp.root.visibility = show
     }
 
-    private fun begin(text: String) {
+    private fun beginOld(text: String) {
         setBusy(true)
         tMode = TransferView.SENDING
         transfer.setMode(TransferView.SENDING)
@@ -461,7 +465,7 @@ private fun deleteRemote(h: HistoryItem) {
         progressView.text = text
     }
 
-    private fun finish(code: Int, text: String) {
+    private fun finishOld(code: Int, text: String) {
         ui.post {
             setBusy(false)
             tMode = code
@@ -479,11 +483,46 @@ private fun deleteRemote(h: HistoryItem) {
         progressView.text = ""
     }
 
-    private fun cancelAll() {
+    private fun cancelAllOld() {
         sender?.cancel()
         uploader?.cancel()
     }
+    private fun setProgress(msg: String) {
+    ui.post {
+        progressView.text = msg
+        val now = System.currentTimeMillis()
+        if (busy && now - lastNotif > 2000) {
+            lastNotif = now
+            notif(msg)
+        }
+    }
+}
 
+private fun begin(text: String) {
+    setBusy(true)
+    notif(text)
+    tMode = TransferView.SENDING
+    transfer.setMode(TransferView.SENDING)
+    refreshStage()
+    progressView.text = text
+}
+
+private fun finish(code: Int, text: String) {
+    ui.post {
+        setBusy(false)
+        TransferService.stop(this)
+        tMode = code
+        transfer.setMode(code)
+        progressView.text = text
+        refreshStage()
+    }
+}
+
+private fun cancelAll() {
+    qStop = true
+    sender?.cancel()
+    uploader?.cancel()
+}
     private fun prompt(
         title: String,
         hint: String,
