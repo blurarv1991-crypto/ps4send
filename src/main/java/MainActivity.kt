@@ -381,10 +381,15 @@ private fun deleteRemote(h: HistoryItem) {
         }
         logBox = Rows.collapsible(this, "Registro", IconView.INFO, logView, false)
         logBox.visibility = if (prefs.getBoolean("showLog", true)) View.VISIBLE else View.GONE
-
+btnScan = W.button(this, "Buscar PS4", IconView.WIFI, 1) { scanPs4() }
+btnHist = W.button(this, "Historial", IconView.INFO, 1) { showHistory() }
+val toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+toolsRow.addView(btnScan.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dp(4) })
+toolsRow.addView(btnHist.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(4) })
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         form.addView(headerRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = dp(4) })
         form.addView(statusCard.view, wrap())
+        form.addView(toolsRow, wrap())
         form.addView(tabsRow, wrap())
         form.addView(stage, wrap())
         form.addView(progressView, wrap())
