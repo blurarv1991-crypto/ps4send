@@ -645,7 +645,55 @@ private fun deleteRemote(h: HistoryItem) {
             resetStage()
         }
     }
+private fun pick(code: Int) {
+    val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "*/*"
+        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+    }
+    startActivityForResult(i, code)
+}
 
+override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (resultCode != RESULT_OK || data == null) return
+    val uris = mutableListOf<Uri>()
+    val cd = data.clipData
+    if (cd != null) {
+        for (n in 0 until cd.itemCount) uris.add(cd.getItemAt(n).uri)
+    } else {
+        data.data?.let { uris.add(it) }
+    }
+    val items = uris.map { u ->
+        try {
+            contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (e: Exception) {
+        }
+        val (name, size) = queryInfo(u)
+        QItem(u, name, size)
+    }
+    if (items.isEmpty()) return
+    if (requestCode == PICK_PKG) {
+        val good = items.filter { it.name.lowercase().endsWith(".pkg") }
+        if (good.isEmpty()) {
+            log("Eso no parece un .pkg: ${items[0].name}")
+            return
+        }
+        pkgQ = good
+        pkgTitle.text = if (good.size == 1) good[0].name else "${good.size} archivos .pkg"
+        pkgSub.text = "${FtpUtil.sizeText(good.sumOf { it.size })} · listo para enviar"
+        W.applyStyle(this, btnSend, 0)
+        resetStage()
+    } else if (requestCode == PICK_FTP) {
+        ftpQ = items
+        ftpLabel.text = if (items.size == 1) {
+            "${items[0].name}  (${FtpUtil.sizeText(items[0].size)})"
+        } else {
+            "${items.size} archivos  (${FtpUtil.sizeText(items.sumOf { it.size })})"
+        }
+        resetStage()
+    }
+}
     private fun copyIp() {
         val ip = statusCard.ip
         if (ip.isEmpty()) {
