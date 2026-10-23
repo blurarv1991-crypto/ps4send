@@ -691,8 +691,47 @@ private fun deleteRemote(h: HistoryItem) {
         ftpLabel.visibility = v
         btnConnect.label.text = if (c) "Reconectar" else "Iniciar conexión"
     }
+private fun sendPkg() {
+    if (busy) {
+        log("Ya hay un envío en curso.")
+        return
+    }
+    if (pkgQ.isEmpty()) {
+        log("Primero elige un archivo .pkg.")
+        return
+    }
+    val host = statusCard.ip.trim()
+    if (host.isEmpty()) {
+        log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
+        return
+    }
+    runHost = host
+    qStop = false
+    qIndex = 0
+    curMode = "PKG"
+    runPkg()
+}
 
-    private fun sendPkg() {
+private fun uploadFtp(dirOverride: String? = null) {
+    if (busy) {
+        log("Ya hay un envío en curso.")
+        return
+    }
+    if (ftpQ.isEmpty()) {
+        log("Primero elige un archivo.")
+        return
+    }
+    val p = ftpParams() ?: return
+    var dir = dirOverride ?: ftpDirV.ifEmpty { "/data/" }
+    if (!dir.endsWith("/")) dir += "/"
+    runParams = p
+    runDir = dir
+    qStop = false
+    qIndex = 0
+    curMode = "FTP"
+    runFtpItem()
+}
+    private fun sendPkgOld() {
         if (busy) {
             log("Ya hay un envío en curso.")
             return
@@ -713,7 +752,7 @@ private fun deleteRemote(h: HistoryItem) {
         s.send(host, uri, pkgSize, { t -> setProgress(t) }, { m -> log(m) }, { c, t -> finish(c, t) })
     }
 
-    private fun uploadFtp() {
+    private fun uploadFtpOld() {
         if (busy) {
             log("Ya hay un envío en curso.")
             return
