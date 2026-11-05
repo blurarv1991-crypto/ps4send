@@ -33,6 +33,7 @@ class MainActivity : Activity() {
     companion object {
         const val PICK_PKG = 1
         const val PICK_FTP = 2
+        const val PICK_PAYLOAD = 3
     }
 
     private val ui = Handler(Looper.getMainLooper())
@@ -386,10 +387,12 @@ btnHist = W.button(this, "Historial", IconView.INFO, 1) { showHistory() }
 val toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 toolsRow.addView(btnScan.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dp(4) })
 toolsRow.addView(btnHist.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(4) })
+val btnPayload = W.button(this, "Enviar payload (9090)", IconView.SEND, 1) { pick(PICK_PAYLOAD) }
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         form.addView(headerRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = dp(4) })
         form.addView(statusCard.view, wrap())
         form.addView(toolsRow, wrap())
+        form.addView(btnPayload.root, wrap())
         form.addView(tabsRow, wrap())
         form.addView(stage, wrap())
         form.addView(progressView, wrap())
@@ -717,6 +720,26 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         QItem(u, name, size)
     }
     if (items.isEmpty()) return
+    if (requestCode == PICK_PAYLOAD) {
+        val p0 = items[0]
+        val pn = p0.name.lowercase()
+        if (!pn.endsWith(".elf") && !pn.endsWith(".bin")) {
+            log("Eso no parece un payload (.elf o .bin): ${p0.name}")
+            return
+        }
+        val phost = statusCard.ip.trim()
+        if (phost.isEmpty()) {
+            log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
+            return
+        }
+        log("Enviando ${p0.name} al puerto 9090...")
+        PayloadSender.send(this, phost, 9090, p0.uri, { m -> log(m) }, { ok ->
+            ui.post {
+                Toast.makeText(this, if (ok) "Payload enviado" else "Falló el envío", Toast.LENGTH_SHORT).show()
+            }
+        })
+        return
+    }
     if (requestCode == PICK_PKG) {
         val good = items.filter { it.name.lowercase().endsWith(".pkg") }
         if (good.isEmpty()) {
