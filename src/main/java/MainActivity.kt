@@ -34,6 +34,7 @@ class MainActivity : Activity() {
         const val PICK_PKG = 1
         const val PICK_FTP = 2
         const val PICK_PAYLOAD = 3
+        const val PICK_USB = 4
     }
 
     private val ui = Handler(Looper.getMainLooper())
@@ -94,6 +95,7 @@ private var runParams: FtpParams? = null
 private var lastNotif = 0L
 private var qStop = false
 private lateinit var btnScan: UiBtn
+private lateinit var usbBtn: UiBtn
 private lateinit var btnHist: UiBtn
 private val dlgTheme = android.R.style.Theme_DeviceDefault_Dialog_Alert
 
@@ -388,10 +390,20 @@ val toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL 
 toolsRow.addView(btnScan.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dp(4) })
 toolsRow.addView(btnHist.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(4) })
 val btnPayload = W.button(this, "Enviar payload (9090)", IconView.SEND, 1) { pick(PICK_PAYLOAD) }
+val usbSel = prefs.getString("usbPkg", "") ?: ""
+val btnUsb = W.button(this, if (usbSel.isEmpty()) "Elegir .pkg para USB" else "USB: $usbSel", IconView.SEND, 1) { pick(PICK_USB) }
+btnUsb.root.setOnLongClickListener {
+    prefs.edit().putString("usbPkg", "").apply()
+    btnUsb.label.text = "Elegir .pkg para USB"
+    log("Archivo USB borrado: el payload usará instalar.pkg o el más grande.")
+    true
+}
+usbBtn = btnUsb
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         form.addView(headerRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = dp(4) })
         form.addView(statusCard.view, wrap())
         form.addView(toolsRow, wrap())
+        form.addView(btnUsb.root, wrap())
         form.addView(btnPayload.root, wrap())
         form.addView(tabsRow, wrap())
         form.addView(stage, wrap())
@@ -720,6 +732,20 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         QItem(u, name, size)
     }
     if (items.isEmpty()) return
+    if (requestCode == PICK_USB) {
+        val u0 = items[0]
+        if (!u0.name.lowercase().endsWith(".pkg")) {
+            log("Eso no parece un .pkg: ${u0.name}")
+            return
+        }
+        prefs.edit().putString("usbPkg", u0.name).apply()
+        usbBtn.label.text = "USB: ${u0.name}"
+        log("Para instalar por USB: ${u0.name}")
+        if (!Uri.decode(u0.uri.toString()).contains("Download")) {
+            log("Aviso: el payload solo busca en la carpeta Download del celular.")
+        }
+        return
+    }
     if (requestCode == PICK_PAYLOAD) {
         val p0 = items[0]
         val pn = p0.name.lowercase()
@@ -736,6 +762,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         PayloadSender.send(this, phost, 9090, p0.uri, { m -> log(m) }, { ok ->
             ui.post {
                 Toast.makeText(this, if (ok) "Payload enviado" else "Falló el envío", Toast.LENGTH_SHORT).show()
+                if (ok) sendUsbName(phost)
             }
         })
         return
@@ -761,6 +788,31 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         resetStage()
     }
 }
+    private fun sendUsbName(host: String) {
+        val nombre = prefs.getString("usbPkg", "") ?: ""
+        thread {
+            val fin = System.currentTimeMillis() + 15000
+            var enviado = false
+            while (!enviado && System.currentTimeMillis() < fin) {
+                try {
+                    java.net.Socket().use { sk ->
+                        sk.connect(java.net.InetSocketAddress(host, 9096), 1000)
+                        sk.getOutputStream().write((nombre + "\n").toByteArray(Charsets.UTF_8))
+                        sk.getOutputStream().flush()
+                        enviado = true
+                    }
+                } catch (e: Exception) {
+                    try { Thread.sleep(300) } catch (e2: Exception) { }
+                }
+            }
+            ui.post {
+                if (!enviado) log("No pude avisarle al payload qué archivo instalar.")
+                else if (nombre.isEmpty()) log("Sin archivo elegido: el payload usará instalar.pkg o el más grande.")
+                else log("Le pedí al payload instalar: $nombre")
+            }
+        }
+    }
+
     private fun copyIp() {
         val ip = statusCard.ip
         if (ip.isEmpty()) {
