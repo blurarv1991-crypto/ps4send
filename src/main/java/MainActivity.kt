@@ -35,6 +35,7 @@ class MainActivity : Activity() {
         const val PICK_FTP = 2
         const val PICK_PAYLOAD = 3
         const val PICK_USB = 4
+        const val PICK_USB_ELF = 5
     }
 
     private val ui = Handler(Looper.getMainLooper())
@@ -96,6 +97,7 @@ private var lastNotif = 0L
 private var qStop = false
 private lateinit var btnScan: UiBtn
 private lateinit var usbBtn: UiBtn
+private var pendingUsb = false
 private lateinit var payloadBtn: UiBtn
 private lateinit var btnHist: UiBtn
 private val dlgTheme = android.R.style.Theme_DeviceDefault_Dialog_Alert
@@ -404,11 +406,9 @@ btnPayload.root.setOnLongClickListener {
 }
 payloadBtn = btnPayload
 val usbSel = prefs.getString("usbPkg", "") ?: ""
-val btnUsb = W.button(this, if (usbSel.isEmpty()) "Elegir .pkg para USB" else "USB: $usbSel", IconView.SEND, 1) { pick(PICK_USB) }
+val btnUsb = W.button(this, if (usbSel.isEmpty()) "Instalar por USB" else "Instalar por USB: $usbSel", IconView.SEND, 0) { startUsbInstall() }
 btnUsb.root.setOnLongClickListener {
-    prefs.edit().putString("usbPkg", "").apply()
-    btnUsb.label.text = "Elegir .pkg para USB"
-    log("Archivo USB borrado: el payload usará instalar.pkg o el más grande.")
+    showUsbMenu()
     true
 }
 usbBtn = btnUsb
@@ -752,11 +752,24 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             return
         }
         prefs.edit().putString("usbPkg", u0.name).apply()
-        usbBtn.label.text = "USB: ${u0.name}"
+        usbBtn.label.text = "Instalar por USB: ${u0.name}"
         log("Para instalar por USB: ${u0.name}")
         if (!Uri.decode(u0.uri.toString()).contains("Download")) {
             log("Aviso: el payload solo busca en la carpeta Download del celular.")
         }
+        if (pendingUsb) startUsbInstall()
+        return
+    }
+    if (requestCode == PICK_USB_ELF) {
+        val e0 = items[0]
+        val en = e0.name.lowercase()
+        if (!en.endsWith(".elf") && !en.endsWith(".bin")) {
+            log("Eso no parece un payload (.elf o .bin): ${e0.name}")
+            return
+        }
+        prefs.edit().putString("usbElfUri", e0.uri.toString()).putString("usbElfName", e0.name).apply()
+        log("Payload para instalar por USB: ${e0.name}")
+        if (pendingUsb) startUsbInstall()
         return
     }
     if (requestCode == PICK_PAYLOAD) {
@@ -813,7 +826,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         doSendPayload(uri, prefs.getString("payloadName", "") ?: "payload")
     }
 
-    private fun doSendPayload(uri: Uri, name: String) {
+    private fun doSendPayload(uri: Uri, name: String, usb: Boolean = false) {
         val phost = statusCard.ip.trim()
         if (phost.isEmpty()) {
             log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
@@ -823,32 +836,97 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         PayloadSender.send(this, phost, 9090, uri, { m -> log(m) }, { ok ->
             ui.post {
                 Toast.makeText(this, if (ok) "Payload enviado" else "Falló el envío", Toast.LENGTH_SHORT).show()
-                if (ok) sendUsbName(phost)
+                if (ok && usb) sendUsbName(phost)
             }
         })
+    }
+
+    private fun startUsbInstall() {
+        val pkg = prefs.getString("usbPkg", "") ?: ""
+        if (pkg.isEmpty()) {
+            log("Elige el .pkg que quieres instalar (de la carpeta Download del celular).")
+            pendingUsb = true
+            pick(PICK_USB)
+            return
+        }
+        val us = prefs.getString("usbElfUri", "") ?: ""
+        val ok = us.isNotEmpty() && (try {
+            contentResolver.openInputStream(Uri.parse(us))?.use { true } ?: false
+        } catch (e: Exception) {
+            false
+        })
+        if (!ok) {
+            log(
+                if (us.isEmpty()) "Elige el payload de instalación (.elf) esta vez; la próxima será con un toque."
+                else "No encuentro el payload guardado (¿bajaste uno nuevo?). Elige el .elf otra vez."
+            )
+            pendingUsb = true
+            pick(PICK_USB_ELF)
+            return
+        }
+        pendingUsb = false
+        doSendPayload(Uri.parse(us), prefs.getString("usbElfName", "") ?: "payload", true)
+    }
+
+    private fun showUsbMenu() {
+        val opciones = arrayOf("Elegir otro .pkg e instalar", "Cambiar el payload (.elf)", "Quitar el .pkg elegido")
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("Instalar por USB")
+            .setItems(opciones) { _, which ->
+                when (which) {
+                    0 -> {
+                        pendingUsb = true
+                        pick(PICK_USB)
+                    }
+                    1 -> {
+                        pendingUsb = false
+                        pick(PICK_USB_ELF)
+                    }
+                    else -> {
+                        pendingUsb = false
+                        prefs.edit().putString("usbPkg", "").apply()
+                        usbBtn.label.text = "Instalar por USB"
+                        log("Archivo USB quitado: el payload usará instalar.pkg o el más grande.")
+                    }
+                }
+            }
+            .show()
     }
 
     private fun sendUsbName(host: String) {
         val nombre = prefs.getString("usbPkg", "") ?: ""
         thread {
             val fin = System.currentTimeMillis() + 15000
-            var enviado = false
-            while (!enviado && System.currentTimeMillis() < fin) {
+            var sk: java.net.Socket? = null
+            while (sk == null && System.currentTimeMillis() < fin) {
                 try {
-                    java.net.Socket().use { sk ->
-                        sk.connect(java.net.InetSocketAddress(host, 9096), 1000)
-                        sk.getOutputStream().write((nombre + "\n").toByteArray(Charsets.UTF_8))
-                        sk.getOutputStream().flush()
-                        enviado = true
-                    }
+                    val t = java.net.Socket()
+                    t.connect(java.net.InetSocketAddress(host, 9096), 1000)
+                    sk = t
                 } catch (e: Exception) {
                     try { Thread.sleep(300) } catch (e2: Exception) { }
                 }
             }
-            ui.post {
-                if (!enviado) log("No pude avisarle al payload qué archivo instalar.")
-                else if (nombre.isEmpty()) log("Sin archivo elegido: el payload usará instalar.pkg o el más grande.")
-                else log("Le pedí al payload instalar: $nombre")
+            if (sk == null) {
+                ui.post { log("No pude avisarle al payload qué archivo instalar.") }
+                return@thread
+            }
+            try {
+                sk.getOutputStream().write((nombre + "\n").toByteArray(Charsets.UTF_8))
+                sk.getOutputStream().flush()
+                ui.post {
+                    if (nombre.isEmpty()) log("Sin archivo elegido: el payload usará instalar.pkg o el más grande.")
+                    else log("Le pedí al payload instalar: $nombre")
+                }
+                sk.soTimeout = 0
+                val rd = java.io.BufferedReader(java.io.InputStreamReader(sk.getInputStream(), Charsets.UTF_8))
+                while (true) {
+                    val ln = rd.readLine() ?: break
+                    if (ln.isNotBlank()) ui.post { log("PS4: $ln") }
+                }
+            } catch (e: Exception) {
+            } finally {
+                try { sk.close() } catch (e: Exception) { }
             }
         }
     }
