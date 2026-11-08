@@ -1,6 +1,8 @@
 package com.ps4send.app
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -139,6 +141,13 @@ class BadgeTitleView(context: Context) : View(context) {
         lineTo(35f, 15f)
     }
 
+    /* Logo opcional: si existe el archivo res/drawable/ps_logo.png se usa; si no, se dibujan las letras */
+    private val logo: Bitmap? = run {
+        val id = context.resources.getIdentifier("ps_logo", "drawable", context.packageName)
+        if (id != 0) BitmapFactory.decodeResource(context.resources, id) else null
+    }
+    private val bmpPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
     private val line1 = "Envía archivos fácilmente"
     private val line2 = "a tu PS4"
 
@@ -164,12 +173,21 @@ class BadgeTitleView(context: Context) : View(context) {
         c.drawCircle(cx, cy, r, fillP)
         c.drawCircle(cx, cy, r - 1.2f * d, ring)
 
-        val s = (circleD * 0.56f) / 31f
-        c.save()
-        c.translate(cx - 22.5f * s, cy - 10f * s)
-        c.scale(s, s)
-        c.drawPath(letters, line)
-        c.restore()
+        val lg = logo
+        if (lg != null) {
+            val box = circleD * 0.58f
+            val sc = minOf(box / lg.width, box / lg.height)
+            val w = lg.width * sc
+            val h = lg.height * sc
+            c.drawBitmap(lg, null, RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f), bmpPaint)
+        } else {
+            val s = (circleD * 0.56f) / 31f
+            c.save()
+            c.translate(cx - 22.5f * s, cy - 10f * s)
+            c.scale(s, s)
+            c.drawPath(letters, line)
+            c.restore()
+        }
 
         val x = margin * 2f + circleD + gap - margin
         val y1 = 36f * d
