@@ -98,6 +98,8 @@ private var qStop = false
 private lateinit var btnScan: UiBtn
 private lateinit var usbBtn: UiBtn
 private var pendingUsb = false
+private lateinit var usbProgress: android.widget.ProgressBar
+private lateinit var usbProgressText: TextView
 private lateinit var payloadBtn: UiBtn
 private lateinit var btnHist: UiBtn
 private val dlgTheme = android.R.style.Theme_DeviceDefault_Dialog_Alert
@@ -416,7 +418,17 @@ usbBtn = btnUsb
         form.addView(headerRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = dp(4) })
         form.addView(statusCard.view, wrap())
         form.addView(toolsRow, wrap())
+        usbProgress = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = 0
+            visibility = View.GONE
+            progressTintList = android.content.res.ColorStateList.valueOf(Ui.BLUE_SOFT)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Ui.LINE)
+        }
+        usbProgressText = W.centered(this, "", 13f, Ui.MUTED).apply { visibility = View.GONE }
         form.addView(btnUsb.root, wrap())
+        form.addView(usbProgress, LinearLayout.LayoutParams(MATCH_PARENT, dp(10)).apply { topMargin = dp(4); bottomMargin = dp(2) })
+        form.addView(usbProgressText, wrap())
         form.addView(btnPayload.root, wrap())
         form.addView(tabsRow, wrap())
         form.addView(stage, wrap())
@@ -722,6 +734,12 @@ private fun pick(code: Int) {
         addCategory(Intent.CATEGORY_OPENABLE)
         type = "*/*"
         putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        if (code == PICK_USB && android.os.Build.VERSION.SDK_INT >= 26) {
+            putExtra(
+                android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
+            )
+        }
     }
     startActivityForResult(i, code)
 }
@@ -865,7 +883,23 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             return
         }
         pendingUsb = false
+        usbProgress.progress = 0
+        usbProgress.visibility = View.GONE
+        usbProgressText.visibility = View.GONE
         doSendPayload(Uri.parse(us), prefs.getString("usbElfName", "") ?: "payload", true)
+    }
+
+    private fun showUsbProgress(hecho: Long, total: Long, mbs: Long) {
+        if (total <= 0L) return
+        usbProgress.visibility = View.VISIBLE
+        usbProgressText.visibility = View.VISIBLE
+        usbProgress.progress = (hecho * 1000L / total).toInt()
+        val pct = (hecho * 100L / total).toInt()
+        usbProgressText.text = if (hecho >= total) {
+            "Descarga completa (${FtpUtil.sizeText(total)})"
+        } else {
+            "$pct%  ·  ${FtpUtil.sizeText(hecho)} de ${FtpUtil.sizeText(total)}  ·  $mbs MB/s"
+        }
     }
 
     private fun showUsbMenu() {
@@ -922,7 +956,17 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                 val rd = java.io.BufferedReader(java.io.InputStreamReader(sk.getInputStream(), Charsets.UTF_8))
                 while (true) {
                     val ln = rd.readLine() ?: break
-                    if (ln.isNotBlank()) ui.post { log("PS4: $ln") }
+                    if (ln.startsWith("P|")) {
+                        val parts = ln.split("|")
+                        if (parts.size >= 4) {
+                            val hecho = parts[1].toLongOrNull() ?: 0L
+                            val total = parts[2].toLongOrNull() ?: 0L
+                            val mbs = parts[3].toLongOrNull() ?: 0L
+                            ui.post { showUsbProgress(hecho, total, mbs) }
+                        }
+                    } else if (ln.isNotBlank()) {
+                        ui.post { log("PS4: $ln") }
+                    }
                 }
             } catch (e: Exception) {
             } finally {
