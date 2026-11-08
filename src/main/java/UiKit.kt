@@ -8,15 +8,19 @@ import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.View
 
 object Ui {
-    val BG = Color.BLACK
-    val CARD = Color.parseColor("#0B1020")
-    val LINE = Color.parseColor("#1C2542")
-    val BLUE = Color.parseColor("#1F5FFF")
-    val BLUE_SOFT = Color.parseColor("#2F6BFF")
+    val BG = Color.parseColor("#070F26")
+    val CARD = Color.parseColor("#0A1226")
+    val CARD_TOP = Color.parseColor("#0F1B3F")
+    val LINE = Color.parseColor("#1E3566")
+    val BLUE = Color.parseColor("#2563FF")
+    val BLUE_SOFT = Color.parseColor("#3D7BFF")
+    val BLUE_LIGHT = Color.parseColor("#5B9BFF")
+    val BLUE_DEEP = Color.parseColor("#1744C9")
     val TEXT = Color.WHITE
     val MUTED = Color.parseColor("#8FA3D9")
     val GREEN = Color.parseColor("#22C55E")
@@ -40,25 +44,79 @@ object Ui {
             if (strokeDp > 0f) setStroke((strokeDp * d).toInt().coerceAtLeast(1), strokeColor)
         }
     }
+
+    /** Caja con degradado vertical (de arriba hacia abajo). */
+    fun gradBox(
+        ctx: Context,
+        top: Int,
+        bottom: Int,
+        radiusDp: Float,
+        strokeColor: Int = Color.TRANSPARENT,
+        strokeDp: Float = 0f
+    ): GradientDrawable {
+        val d = ctx.resources.displayMetrics.density
+        return GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(top, bottom)).apply {
+            cornerRadius = radiusDp * d
+            if (strokeDp > 0f) setStroke((strokeDp * d).toInt().coerceAtLeast(1), strokeColor)
+        }
+    }
+
+    /** Circulo con borde. */
+    fun circle(ctx: Context, fill: Int, strokeColor: Int, strokeDp: Float): GradientDrawable {
+        val d = ctx.resources.displayMetrics.density
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(fill)
+            setStroke((strokeDp * d).toInt().coerceAtLeast(1), strokeColor)
+        }
+    }
+
+    /** Fondo de toda la pantalla: azul noche que se oscurece hacia abajo. */
+    fun pageBg(): GradientDrawable =
+        GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.parseColor("#070F26"), Color.parseColor("#050B1E"), Color.parseColor("#02040C"))
+        )
 }
 
 class BadgeTitleView(context: Context) : View(context) {
 
     private val d = resources.displayMetrics.density
+    private val circleD = 64f * d
+    private val margin = 6f * d
+    private val gap = 14f * d
 
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.BLUE }
+    private val glow = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fillP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#0A1636") }
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Ui.BLUE_SOFT
+        strokeWidth = 2.5f * d
+    }
 
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         color = Color.WHITE
-        strokeWidth = 1.8f
+        strokeWidth = 2.2f
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
 
-    private val txt = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val t1 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
-        textSize = 24f * d
+        textSize = 30f * d
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC)
+    }
+
+    private val t2 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Ui.BLUE_LIGHT
+        textSize = 30f * d
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC)
+    }
+
+    private val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Ui.MUTED
+        textSize = 13f * d
     }
 
     private val letters = Path().apply {
@@ -81,24 +139,44 @@ class BadgeTitleView(context: Context) : View(context) {
         lineTo(35f, 15f)
     }
 
+    private val line1 = "Envía archivos fácilmente"
+    private val line2 = "a tu PS4"
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val s = 28f * d / 20f
-        val total = (46f * s + 10f * d + txt.measureText("Send")).toInt()
-        setMeasuredDimension(total, (34f * d).toInt())
+        val titleW = t1.measureText("PS4 ") + t2.measureText("Send")
+        val textW = maxOf(titleW, sub.measureText(line1))
+        val total = (margin * 2f + circleD + gap + textW).toInt()
+        setMeasuredDimension(total, (80f * d).toInt())
     }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
-        val s = 28f * d / 20f
-        val top = (height - 28f * d) / 2f
+        val cx = margin + circleD / 2f
+        val cy = height / 2f
+        val r = circleD / 2f
+
+        glow.shader = RadialGradient(
+            cx, cy, r + margin,
+            intArrayOf(Color.parseColor("#663D7BFF"), Color.parseColor("#003D7BFF")),
+            floatArrayOf(0.6f, 1f), Shader.TileMode.CLAMP
+        )
+        c.drawCircle(cx, cy, r + margin, glow)
+        c.drawCircle(cx, cy, r, fillP)
+        c.drawCircle(cx, cy, r - 1.2f * d, ring)
+
+        val s = (circleD * 0.56f) / 31f
         c.save()
-        c.translate(0f, top)
+        c.translate(cx - 22.5f * s, cy - 10f * s)
         c.scale(s, s)
-        c.drawRoundRect(RectF(0f, 0f, 46f, 20f), 6f, 6f, fill)
         c.drawPath(letters, line)
         c.restore()
-        val base = height / 2f - (txt.descent() + txt.ascent()) / 2f
-        c.drawText("Send", 46f * s + 10f * d, base, txt)
+
+        val x = margin * 2f + circleD + gap - margin
+        val y1 = 36f * d
+        c.drawText("PS4 ", x, y1, t1)
+        c.drawText("Send", x + t1.measureText("PS4 "), y1, t2)
+        c.drawText(line1, x, y1 + 20f * d, sub)
+        c.drawText(line2, x, y1 + 37f * d, sub)
     }
 }
 
@@ -313,6 +391,25 @@ class FileIllustrationView(context: Context) : View(context) {
         strokeJoin = Paint.Join.ROUND
     }
 
+    private val deco = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Ui.BLUE_SOFT
+        strokeWidth = 1.8f * d
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    private val platform = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Ui.BLUE_SOFT
+        strokeWidth = 2.2f * d
+    }
+
+    private val platformFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#262F6BFF")
+    }
+
     private val file = Path().apply {
         moveTo(6f, 2.5f)
         lineTo(14f, 2.5f)
@@ -345,20 +442,29 @@ class FileIllustrationView(context: Context) : View(context) {
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(resolveSize(100, widthMeasureSpec), (116f * d).toInt())
+        setMeasuredDimension(resolveSize(100, widthMeasureSpec), (150f * d).toInt())
     }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val cx = width / 2f
-        val cy = height / 2f
-        val r = 56f * d
+        val cy = 66f * d
+        val r = 76f * d
         glow.shader = RadialGradient(
             cx, cy, r,
-            intArrayOf(Color.parseColor("#331F5FFF"), Color.parseColor("#001F5FFF")),
+            intArrayOf(Color.parseColor("#443D7BFF"), Color.parseColor("#003D7BFF")),
             null, Shader.TileMode.CLAMP
         )
         c.drawCircle(cx, cy, r, glow)
+
+        // plataforma bajo el archivo
+        val plat = RectF(cx - 88f * d, cy + 46f * d, cx + 88f * d, cy + 64f * d)
+        c.drawOval(plat, platformFill)
+        c.drawOval(plat, platform)
+        val plat2 = RectF(cx - 60f * d, cy + 50f * d, cx + 60f * d, cy + 60f * d)
+        c.drawOval(plat2, platform)
+
+        // archivo con el cubo
         val s = 92f * d / 24f
         c.save()
         c.translate(cx - 12f * s, cy - 12f * s)
@@ -367,5 +473,27 @@ class FileIllustrationView(context: Context) : View(context) {
         c.drawPath(file, line)
         c.drawPath(cube, line)
         c.restore()
+
+        // formas de adorno (equis, cuadrado, circulo, triangulos)
+        val xs = cx - 124f * d
+        val ys = cy - 8f * d
+        c.drawLine(xs - 8f * d, ys - 8f * d, xs + 8f * d, ys + 8f * d, deco)
+        c.drawLine(xs + 8f * d, ys - 8f * d, xs - 8f * d, ys + 8f * d, deco)
+        c.drawRect(cx - 98f * d, cy + 24f * d, cx - 82f * d, cy + 40f * d, deco)
+        c.drawCircle(cx + 122f * d, cy + 6f * d, 8f * d, deco)
+        val tri = Path().apply {
+            moveTo(cx + 96f * d, cy - 54f * d)
+            lineTo(cx + 106f * d, cy - 36f * d)
+            lineTo(cx + 86f * d, cy - 36f * d)
+            close()
+        }
+        c.drawPath(tri, deco)
+        val tri2 = Path().apply {
+            moveTo(cx + 78f * d, cy + 28f * d)
+            lineTo(cx + 85f * d, cy + 40f * d)
+            lineTo(cx + 71f * d, cy + 40f * d)
+            close()
+        }
+        c.drawPath(tri2, deco)
     }
 }
