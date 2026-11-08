@@ -96,6 +96,7 @@ private var lastNotif = 0L
 private var qStop = false
 private lateinit var btnScan: UiBtn
 private lateinit var usbBtn: UiBtn
+private lateinit var payloadBtn: UiBtn
 private lateinit var btnHist: UiBtn
 private val dlgTheme = android.R.style.Theme_DeviceDefault_Dialog_Alert
 
@@ -389,7 +390,13 @@ btnHist = W.button(this, "Historial", IconView.INFO, 1) { showHistory() }
 val toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 toolsRow.addView(btnScan.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dp(4) })
 toolsRow.addView(btnHist.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(4) })
-val btnPayload = W.button(this, "Enviar payload (9090)", IconView.SEND, 1) { pick(PICK_PAYLOAD) }
+val plName = prefs.getString("payloadName", "") ?: ""
+val btnPayload = W.button(this, if (plName.isEmpty()) "Enviar payload (9090)" else "Enviar payload: $plName", IconView.SEND, 1) { sendSavedPayload() }
+btnPayload.root.setOnLongClickListener {
+    pick(PICK_PAYLOAD)
+    true
+}
+payloadBtn = btnPayload
 val usbSel = prefs.getString("usbPkg", "") ?: ""
 val btnUsb = W.button(this, if (usbSel.isEmpty()) "Elegir .pkg para USB" else "USB: $usbSel", IconView.SEND, 1) { pick(PICK_USB) }
 btnUsb.root.setOnLongClickListener {
@@ -753,6 +760,79 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             log("Eso no parece un payload (.elf o .bin): ${p0.name}")
             return
         }
+        prefs.edit().putString("payloadUri", p0.uri.toString()).putString("payloadName", p0.name).apply()
+        payloadBtn.label.text = "Enviar payload: ${p0.name}"
+        doSendPayload(p0.uri, p0.name)
+        return
+    }
+    if (requestCode == PICK_PKG) {
+            if (!name.lowercase().endsWith(".pkg")) {
+                log("Eso no parece un .pkg: $name")
+                return
+            }
+            pkgUri = uri
+            pkgSize = size
+            pkgTitle.text = name
+            pkgSub.text = "${FtpUtil.sizeText(size)} · listo para enviar"
+            W.applyStyle(this, btnSend, 0)
+            resetStage()
+        } else if (requestCode == PICK_FTP) {
+            ftpUri = uri
+            ftpName = name
+            ftpSize = size
+            ftpLabel.text = "$name  (${FtpUtil.sizeText(size)})"
+            resetStage()
+        }
+    }
+private fun pick(code: Int) {
+    val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "*/*"
+        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+    }
+    startActivityForResult(i, code)
+}
+
+override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (resultCode != RESULT_OK || data == null) return
+    val uris = mutableListOf<Uri>()
+    val cd = data.clipData
+    if (cd != null) {
+        for (n in 0 until cd.itemCount) uris.add(cd.getItemAt(n).uri)
+    } else {
+        data.data?.let { uris.add(it) }
+    }
+    val items = uris.map { u ->
+        try {
+            contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (e: Exception) {
+        }
+        val (name, size) = queryInfo(u)
+        QItem(u, name, size)
+    }
+    if (items.isEmpty()) return
+    if (requestCode == PICK_USB) {
+        val u0 = items[0]
+        if (!u0.name.lowercase().endsWith(".pkg")) {
+            log("Eso no parece un .pkg: ${u0.name}")
+            return
+        }
+        prefs.edit().putString("usbPkg", u0.name).apply()
+        usbBtn.label.text = "USB: ${u0.name}"
+        log("Para instalar por USB: ${u0.name}")
+        if (!Uri.decode(u0.uri.toString()).contains("Download")) {
+            log("Aviso: el payload solo busca en la carpeta Download del celular.")
+        }
+        return
+    }
+    if (requestCode == PICK_PAYLOAD) {
+        val p0 = items[0]
+        val pn = p0.name.lowercase()
+        if (!pn.endsWith(".elf") && !pn.endsWith(".bin")) {
+            log("Eso no parece un payload (.elf o .bin): ${p0.name}")
+            return
+        }
         val phost = statusCard.ip.trim()
         if (phost.isEmpty()) {
             log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
@@ -788,6 +868,42 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         resetStage()
     }
 }
+    private fun sendSavedPayload() {
+        val us = prefs.getString("payloadUri", "") ?: ""
+        if (us.isEmpty()) {
+            log("Elige el payload (.elf) esta vez; la próxima se enviará con un toque.")
+            pick(PICK_PAYLOAD)
+            return
+        }
+        val uri = Uri.parse(us)
+        val ok = try {
+            contentResolver.openInputStream(uri)?.use { true } ?: false
+        } catch (e: Exception) {
+            false
+        }
+        if (!ok) {
+            log("No encuentro el payload guardado (¿lo borraste o bajaste uno nuevo?). Elige el .elf otra vez.")
+            pick(PICK_PAYLOAD)
+            return
+        }
+        doSendPayload(uri, prefs.getString("payloadName", "") ?: "payload")
+    }
+
+    private fun doSendPayload(uri: Uri, name: String) {
+        val phost = statusCard.ip.trim()
+        if (phost.isEmpty()) {
+            log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
+            return
+        }
+        log("Enviando $name al puerto 9090...")
+        PayloadSender.send(this, phost, 9090, uri, { m -> log(m) }, { ok ->
+            ui.post {
+                Toast.makeText(this, if (ok) "Payload enviado" else "Falló el envío", Toast.LENGTH_SHORT).show()
+                if (ok) sendUsbName(phost)
+            }
+        })
+    }
+
     private fun sendUsbName(host: String) {
         val nombre = prefs.getString("usbPkg", "") ?: ""
         thread {
