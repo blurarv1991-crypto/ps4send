@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
+import android.text.TextUtils
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -48,17 +49,19 @@ object W {
         val icon = IconView(ctx, kind)
         val tv = TextView(ctx).apply {
             text = caption
-            textSize = 14f
+            textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
         }
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(ctx, 14), dp(ctx, 13), dp(ctx, 14), dp(ctx, 13))
+            setPadding(dp(ctx, 16), dp(ctx, 15), dp(ctx, 16), dp(ctx, 15))
             setOnClickListener { onClick() }
         }
-        root.addView(icon, LinearLayout.LayoutParams(dp(ctx, 22), dp(ctx, 22)))
-        root.addView(tv, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 8) })
+        root.addView(icon, LinearLayout.LayoutParams(dp(ctx, 24), dp(ctx, 24)))
+        root.addView(tv, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 10) })
         val b = UiBtn(root, icon, tv)
         applyStyle(ctx, b, styleId)
         return b
@@ -68,32 +71,32 @@ object W {
         val fg: Int
         when (styleId) {
             0 -> {
-                b.root.background = Ui.box(ctx, Ui.BLUE, 14f)
+                b.root.background = Ui.gradBox(ctx, Ui.BLUE_SOFT, Ui.BLUE_DEEP, 16f, Ui.BLUE_LIGHT, 1f)
                 fg = Color.WHITE
             }
             1 -> {
-                b.root.background = Ui.box(ctx, Color.TRANSPARENT, 14f, Ui.BLUE_SOFT, 1.5f)
+                b.root.background = Ui.gradBox(ctx, Color.parseColor("#0F1D47"), Color.parseColor("#091331"), 16f, Ui.BLUE_SOFT, 1.5f)
                 fg = Ui.TEXT
             }
             else -> {
-                b.root.background = Ui.box(ctx, Ui.GRAY_BTN, 14f)
+                b.root.background = Ui.gradBox(ctx, Color.parseColor("#141C38"), Color.parseColor("#0E1428"), 16f, Ui.LINE, 1f)
                 fg = Ui.GRAY_TXT
             }
         }
         b.label.setTextColor(fg)
-        b.icon.setTint(if (styleId == 1) Ui.BLUE_SOFT else fg)
+        b.icon.setTint(if (styleId == 1) Ui.BLUE_LIGHT else fg)
     }
 
     fun tab(ctx: Context, caption: String, kind: Int, onClick: () -> Unit): UiBtn {
         val b = button(ctx, caption, kind, 2, onClick)
-        b.root.setPadding(dp(ctx, 8), dp(ctx, 11), dp(ctx, 8), dp(ctx, 11))
-        b.label.textSize = 13f
+        b.root.setPadding(dp(ctx, 8), dp(ctx, 13), dp(ctx, 8), dp(ctx, 13))
+        b.label.textSize = 14f
         return b
     }
 
     fun styleTab(ctx: Context, b: UiBtn, active: Boolean) {
         if (active) {
-            b.root.background = Ui.box(ctx, Ui.BLUE, 11f)
+            b.root.background = Ui.gradBox(ctx, Ui.BLUE_SOFT, Ui.BLUE_DEEP, 14f, Ui.BLUE_LIGHT, 1f)
             b.label.setTextColor(Color.WHITE)
             b.icon.setTint(Color.WHITE)
         } else {
@@ -153,8 +156,8 @@ class StatusCard(
     private var polling = false
 
     private val dot = View(ctx)
-    private val statusText = W.label(ctx, "", 12f, Ui.GRAY_TXT)
-    private val ipText = W.label(ctx, "", 12f, Ui.MUTED)
+    private val statusText = W.label(ctx, "", 13f, Ui.GRAY_TXT)
+    private val ipText = W.label(ctx, "", 14f, Ui.MUTED)
     val view = LinearLayout(ctx)
 
     init {
@@ -163,11 +166,11 @@ class StatusCard(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        titleRow.addView(W.label(ctx, "PS4", 15f).apply { typeface = Typeface.DEFAULT_BOLD })
+        titleRow.addView(W.label(ctx, "PS4", 18f).apply { typeface = Typeface.DEFAULT_BOLD })
         titleRow.addView(
             dot,
-            LinearLayout.LayoutParams(W.dp(ctx, 8), W.dp(ctx, 8)).apply {
-                marginStart = W.dp(ctx, 8)
+            LinearLayout.LayoutParams(W.dp(ctx, 9), W.dp(ctx, 9)).apply {
+                marginStart = W.dp(ctx, 10)
                 marginEnd = W.dp(ctx, 6)
             }
         )
@@ -175,18 +178,37 @@ class StatusCard(
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         col.addView(titleRow)
         col.addView(ipText)
-        val copy = IconView(ctx, IconView.COPY).apply { setOnClickListener { onCopy() } }
+
+        val consoleBox = LinearLayout(ctx).apply {
+            gravity = Gravity.CENTER
+            background = Ui.box(ctx, Color.parseColor("#0C1530"), 12f, Ui.LINE, 1f)
+        }
+        consoleBox.addView(IconView(ctx, IconView.CONSOLE, Ui.BLUE_LIGHT), LinearLayout.LayoutParams(W.dp(ctx, 40), W.dp(ctx, 26)))
+
+        val sep = View(ctx).apply { setBackgroundColor(Ui.LINE) }
+
+        val copyBox = LinearLayout(ctx).apply {
+            gravity = Gravity.CENTER
+            background = Ui.gradBox(ctx, Ui.BLUE_SOFT, Ui.BLUE_DEEP, 14f, Ui.BLUE_LIGHT, 1f)
+            setOnClickListener { onCopy() }
+        }
+        copyBox.addView(IconView(ctx, IconView.COPY, Color.WHITE), LinearLayout.LayoutParams(W.dp(ctx, 24), W.dp(ctx, 24)))
+
         view.orientation = LinearLayout.HORIZONTAL
         view.gravity = Gravity.CENTER_VERTICAL
-        view.background = Ui.box(ctx, Ui.CARD, 14f, Ui.LINE, 1f)
-        view.setPadding(W.dp(ctx, 12), W.dp(ctx, 12), W.dp(ctx, 12), W.dp(ctx, 12))
+        view.background = Ui.gradBox(ctx, Ui.CARD_TOP, Ui.CARD, 18f, Ui.LINE, 1f)
+        view.setPadding(W.dp(ctx, 14), W.dp(ctx, 14), W.dp(ctx, 14), W.dp(ctx, 14))
         view.setOnClickListener { onEdit() }
-        view.addView(IconView(ctx, IconView.CONSOLE), LinearLayout.LayoutParams(W.dp(ctx, 46), W.dp(ctx, 30)))
+        view.addView(consoleBox, LinearLayout.LayoutParams(W.dp(ctx, 62), W.dp(ctx, 46)))
         view.addView(
             col,
-            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = W.dp(ctx, 12) }
+            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = W.dp(ctx, 14) }
         )
-        view.addView(copy, LinearLayout.LayoutParams(W.dp(ctx, 28), W.dp(ctx, 28)))
+        view.addView(
+            sep,
+            LinearLayout.LayoutParams(W.dp(ctx, 1), W.dp(ctx, 40)).apply { marginEnd = W.dp(ctx, 12) }
+        )
+        view.addView(copyBox, LinearLayout.LayoutParams(W.dp(ctx, 46), W.dp(ctx, 46)))
     }
 
     fun setIp(v: String) {
