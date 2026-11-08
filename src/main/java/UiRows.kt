@@ -15,7 +15,7 @@ object Rows {
 
     fun card(ctx: Context): LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
-        background = Ui.box(ctx, Ui.CARD, 14f, Ui.LINE, 1f)
+        background = Ui.gradBox(ctx, Ui.CARD_TOP, Ui.CARD, 18f, Ui.LINE, 1f)
     }
 
     fun divider(ctx: Context): View = View(ctx).apply { setBackgroundColor(Ui.LINE) }
