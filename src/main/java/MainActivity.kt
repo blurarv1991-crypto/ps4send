@@ -98,6 +98,7 @@ private var qStop = false
 private lateinit var btnScan: UiBtn
 private lateinit var usbBtn: UiBtn
 private var pendingUsb = false
+private val usbQueue = ArrayList<String>()
 private lateinit var usbProgress: android.widget.ProgressBar
 private lateinit var usbProgressText: TextView
 private lateinit var payloadBtn: UiBtn
@@ -927,11 +928,129 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             return
         }
         val nombres = files.map { "${it.name}\n${FtpUtil.sizeText(it.length())}" }.toTypedArray()
-        AlertDialog.Builder(this, dlgTheme)
-            .setTitle("Elige el .pkg (Download)")
-            .setItems(nombres) { _, i -> setUsbPkg(files[i].name) }
+        val marcados = BooleanArray(files.size)
+        val dlg = AlertDialog.Builder(this, dlgTheme)
+            .setTitle("Marca los .pkg (mantén pulsado para borrar)")
+            .setMultiChoiceItems(nombres, marcados) { _, i, on -> marcados[i] = on }
+            .setPositiveButton("Instalar") { _, _ ->
+                val sel = files.filterIndexed { i, _ -> marcados[i] }.map { it.name }
+                if (sel.isEmpty()) {
+                    log("No marcaste ningún .pkg.")
+                } else {
+                    usbQueue.clear()
+                    usbQueue.addAll(sel)
+                    pendingUsb = true
+                    setUsbPkg(sel[0])
+                }
+            }
+            .setNegativeButton("Cerrar", null)
             .setNeutralButton("Otra carpeta") { _, _ -> pick(PICK_USB) }
+            .create()
+        dlg.show()
+        dlg.listView.setOnItemLongClickListener { _, _, pos, _ ->
+            confirmDeletePkg(files[pos])
+            true
+        }
+    }
+
+    private fun confirmDeletePkg(f: java.io.File) {
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("¿Borrar este archivo?")
+            .setMessage("${f.name}\n${FtpUtil.sizeText(f.length())}\n\nSe borra de la carpeta Download del celular.")
+            .setPositiveButton("Borrar") { _, _ ->
+                val ok = f.delete()
+                if (ok) {
+                    log("Borrado: ${f.name}")
+                    if ((prefs.getString("usbPkg", "") ?: "") == f.name) {
+                        prefs.edit().putString("usbPkg", "").apply()
+                        usbBtn.label.text = "Instalar por USB"
+                    }
+                } else {
+                    log("No pude borrar ${f.name}.")
+                }
+                chooseUsbPkg()
+            }
+            .setNegativeButton("Cancelar") { _, _ -> chooseUsbPkg() }
             .show()
+    }
+
+    /* Aviso en el celular cuando termina (o se interrumpe) una instalación */
+    private fun notifyDone(titulo: String, texto: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            val b: android.app.Notification.Builder
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel("ps4send_done", "Instalaciones", android.app.NotificationManager.IMPORTANCE_DEFAULT)
+                )
+                b = android.app.Notification.Builder(this, "ps4send_done")
+            } else {
+                b = android.app.Notification.Builder(this)
+            }
+            b.setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle(titulo)
+                .setContentText(texto)
+                .setAutoCancel(true)
+            nm.notify(System.currentTimeMillis().toInt(), b.build())
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun addUsbHistory(nombre: String, ok: Boolean, total: Long, avg: Long) {
+        val linea = "${System.currentTimeMillis()}|${nombre.replace('|', '/')}|$total|$avg|${if (ok) 1 else 0}"
+        val viejas = (prefs.getString("usbHist", "") ?: "").split("\n").filter { it.isNotBlank() }
+        val todas = (viejas + linea).takeLast(30)
+        prefs.edit().putString("usbHist", todas.joinToString("\n")).apply()
+    }
+
+    private fun showUsbHistory() {
+        val lineas = (prefs.getString("usbHist", "") ?: "").split("\n").filter { it.isNotBlank() }.reversed()
+        if (lineas.isEmpty()) {
+            log("Todavía no hay instalaciones por USB en el historial.")
+            return
+        }
+        val fmt = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault())
+        val textos = lineas.map { l ->
+            val p = l.split("|")
+            if (p.size >= 5) {
+                val fecha = fmt.format(java.util.Date(p[0].toLongOrNull() ?: 0L))
+                val total = p[2].toLongOrNull() ?: 0L
+                val mbs = p[3].toLongOrNull() ?: 0L
+                val marca = if (p[4] == "1") "✔" else "✘"
+                "$marca ${p[1]}\n${FtpUtil.sizeText(total)} · $mbs MB/s · $fecha"
+            } else {
+                l
+            }
+        }.toTypedArray()
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("Historial USB")
+            .setItems(textos, null)
+            .setNeutralButton("Vaciar") { _, _ -> prefs.edit().putString("usbHist", "").apply() }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /* Se llama cuando termina una instalacion por USB: avisa, anota y sigue con la cola */
+    private fun onUsbEnd(nombre: String, ok: Boolean, total: Long, avg: Long) {
+        addUsbHistory(nombre, ok, total, avg)
+        if (!ok) {
+            usbQueue.clear()
+            log("La instalación de $nombre no terminó.")
+            notifyDone("Instalación interrumpida", nombre)
+            return
+        }
+        if (usbQueue.isNotEmpty()) usbQueue.removeAt(0)
+        if (usbQueue.isNotEmpty()) {
+            val next = usbQueue[0]
+            prefs.edit().putString("usbPkg", next).apply()
+            usbBtn.label.text = "Instalar por USB: $next"
+            log("Listo: $nombre. Sigue: $next (${usbQueue.size} en cola)")
+            notifyDone("Enviado a la PS4: $nombre", "Sigue: $next")
+            ui.postDelayed({ startUsbInstall() }, 3000)
+        } else {
+            log("Listo: $nombre se envió a la PS4.")
+            notifyDone("Instalación terminada", nombre)
+        }
     }
 
     private fun showUsbProgress(hecho: Long, total: Long, mbs: Long) {
@@ -948,7 +1067,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
     }
 
     private fun showUsbMenu() {
-        val opciones = arrayOf("Elegir otro .pkg e instalar", "Cambiar el payload (.elf)", "Quitar el .pkg elegido")
+        val opciones = arrayOf("Elegir .pkg e instalar", "Cambiar el payload (.elf)", "Ver historial USB", "Quitar el .pkg elegido")
         AlertDialog.Builder(this, dlgTheme)
             .setTitle("Instalar por USB")
             .setItems(opciones) { _, which ->
@@ -961,8 +1080,10 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                         pendingUsb = false
                         pick(PICK_USB_ELF)
                     }
+                    2 -> showUsbHistory()
                     else -> {
                         pendingUsb = false
+                        usbQueue.clear()
                         prefs.edit().putString("usbPkg", "").apply()
                         usbBtn.label.text = "Instalar por USB"
                         log("Archivo USB quitado: el payload usará instalar.pkg o el más grande.")
@@ -990,6 +1111,10 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                 ui.post { log("No pude avisarle al payload qué archivo instalar.") }
                 return@thread
             }
+            var completo = false
+            var totalB = 0L
+            var tIni = 0L
+            var tFin = 0L
             try {
                 sk.getOutputStream().write((nombre + "\n").toByteArray(Charsets.UTF_8))
                 sk.getOutputStream().flush()
@@ -1007,6 +1132,12 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                             val hecho = parts[1].toLongOrNull() ?: 0L
                             val total = parts[2].toLongOrNull() ?: 0L
                             val mbs = parts[3].toLongOrNull() ?: 0L
+                            if (tIni == 0L) tIni = System.currentTimeMillis()
+                            totalB = total
+                            if (total > 0L && hecho >= total && !completo) {
+                                completo = true
+                                tFin = System.currentTimeMillis()
+                            }
                             ui.post { showUsbProgress(hecho, total, mbs) }
                         }
                     } else if (ln.isNotBlank()) {
@@ -1017,6 +1148,9 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             } finally {
                 try { sk.close() } catch (e: Exception) { }
             }
+            val seg = if (completo && tIni > 0L) maxOf(1L, (tFin - tIni) / 1000L) else 0L
+            val avg = if (seg > 0L) totalB / 1000000L / seg else 0L
+            ui.post { onUsbEnd(nombre, completo, totalB, avg) }
         }
     }
 
