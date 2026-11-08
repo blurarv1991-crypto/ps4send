@@ -769,13 +769,10 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             log("Eso no parece un .pkg: ${u0.name}")
             return
         }
-        prefs.edit().putString("usbPkg", u0.name).apply()
-        usbBtn.label.text = "Instalar por USB: ${u0.name}"
-        log("Para instalar por USB: ${u0.name}")
         if (!Uri.decode(u0.uri.toString()).contains("Download")) {
             log("Aviso: el payload solo busca en la carpeta Download del celular.")
         }
-        if (pendingUsb) startUsbInstall()
+        setUsbPkg(u0.name)
         return
     }
     if (requestCode == PICK_USB_ELF) {
@@ -864,7 +861,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         if (pkg.isEmpty()) {
             log("Elige el .pkg que quieres instalar (de la carpeta Download del celular).")
             pendingUsb = true
-            pick(PICK_USB)
+            chooseUsbPkg()
             return
         }
         val us = prefs.getString("usbElfUri", "") ?: ""
@@ -889,6 +886,54 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         doSendPayload(Uri.parse(us), prefs.getString("usbElfName", "") ?: "payload", true)
     }
 
+    private fun setUsbPkg(name: String) {
+        prefs.edit().putString("usbPkg", name).apply()
+        usbBtn.label.text = "Instalar por USB: $name"
+        log("Para instalar por USB: $name")
+        if (pendingUsb) startUsbInstall()
+    }
+
+    /* Lista propia con solo los .pkg de Download (necesita el permiso de acceso a todos los archivos, Android 11+) */
+    private fun chooseUsbPkg() {
+        if (android.os.Build.VERSION.SDK_INT < 30) {
+            pick(PICK_USB)
+            return
+        }
+        if (!android.os.Environment.isExternalStorageManager()) {
+            log("Para ver solo los .pkg, activa \"Permitir acceso a todos los archivos\" para PS4 Send y vuelve a tocar el botón.")
+            try {
+                startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (e: Exception) {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                } catch (e2: Exception) {
+                    pick(PICK_USB)
+                }
+            }
+            return
+        }
+        val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val files = (dir.listFiles() ?: emptyArray<java.io.File>())
+            .filter { it.isFile && it.name.lowercase().endsWith(".pkg") }
+            .sortedByDescending { it.lastModified() }
+        if (files.isEmpty()) {
+            log("No hay archivos .pkg en la carpeta Download. Elige uno a mano.")
+            pick(PICK_USB)
+            return
+        }
+        val nombres = files.map { "${it.name}\n${FtpUtil.sizeText(it.length())}" }.toTypedArray()
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("Elige el .pkg (Download)")
+            .setItems(nombres) { _, i -> setUsbPkg(files[i].name) }
+            .setNeutralButton("Otra carpeta") { _, _ -> pick(PICK_USB) }
+            .show()
+    }
+
     private fun showUsbProgress(hecho: Long, total: Long, mbs: Long) {
         if (total <= 0L) return
         usbProgress.visibility = View.VISIBLE
@@ -910,7 +955,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                 when (which) {
                     0 -> {
                         pendingUsb = true
-                        pick(PICK_USB)
+                        chooseUsbPkg()
                     }
                     1 -> {
                         pendingUsb = false
