@@ -292,20 +292,26 @@ private fun deleteRemote(h: HistoryItem) {
         statusCard.ftpPort = ftpPortV
         statusCard.setIp(prefs.getString("ip", "") ?: "")
 
-        val gear = IconView(this, IconView.GEAR, Ui.BLUE_SOFT).apply { setOnClickListener { showSettings() } }
+        val gearIcon = IconView(this, IconView.GEAR, Ui.BLUE_LIGHT)
+        val gear = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            background = Ui.circle(this@MainActivity, Ui.CARD_TOP, Ui.LINE, 1f)
+            setOnClickListener { showSettings() }
+            addView(gearIcon, LinearLayout.LayoutParams(dp(24), dp(24)))
+        }
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         headerRow.addView(BadgeTitleView(this), LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         headerRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        headerRow.addView(gear, LinearLayout.LayoutParams(dp(30), dp(30)))
+        headerRow.addView(gear, LinearLayout.LayoutParams(dp(46), dp(46)))
 
         tabPkg = W.tab(this, "Instalar PKG", IconView.CUBE) { showMode(false) }
         tabFtp = W.tab(this, "Enviar por FTP", IconView.FOLDER_UP) { showMode(true) }
         val tabsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = Ui.box(this@MainActivity, Ui.CARD, 14f, Ui.LINE, 1f)
+            background = Ui.gradBox(this@MainActivity, Ui.CARD_TOP, Ui.CARD, 16f, Ui.LINE, 1f)
             setPadding(dp(3), dp(3), dp(3), dp(3))
         }
         tabsRow.addView(tabPkg.root, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
@@ -425,7 +431,7 @@ usbBtn = btnUsb
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Ui.BG)
+            background = Ui.pageBg()
             setPadding(dp(16), dp(28), dp(16), dp(8))
         }
         root.addView(formScroll, LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
