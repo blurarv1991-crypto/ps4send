@@ -964,21 +964,69 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
     ) {
         val nombres = files.map { "${it.name}\n${FtpUtil.sizeText(it.length())}" }.toTypedArray()
         val marcados = BooleanArray(files.size)
+        var dlgRef: AlertDialog? = null
+        fun textoBorrar(): String {
+            val n = marcados.count { it }
+            return if (n > 0) "Borrar ($n)" else "Borrar"
+        }
         val dlg = AlertDialog.Builder(this, dlgTheme)
-            .setTitle("Marca los .pkg (mantén pulsado para borrar)")
-            .setMultiChoiceItems(nombres, marcados) { _, i, on -> marcados[i] = on }
+            .setTitle("Marca los .pkg (mantén pulsado uno para borrarlo)")
+            .setMultiChoiceItems(nombres, marcados) { _, i, on ->
+                marcados[i] = on
+                dlgRef?.getButton(AlertDialog.BUTTON_NEGATIVE)?.text = textoBorrar()
+            }
             .setPositiveButton(positive) { _, _ ->
                 val sel = files.filterIndexed { i, _ -> marcados[i] }
                 if (sel.isEmpty()) log("No marcaste ningún .pkg.") else onPick(sel)
             }
-            .setNegativeButton("Cerrar", null)
+            .setNegativeButton("Borrar", null)
             .setNeutralButton("Otra carpeta") { _, _ -> pick(fallbackCode) }
             .create()
+        dlgRef = dlg
         dlg.show()
+        // "Borrar" no cierra la ventana por si no hay nada marcado
+        dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+            val sel = files.filterIndexed { i, _ -> marcados[i] }
+            if (sel.isEmpty()) {
+                Toast.makeText(this, "Marca primero los .pkg que quieras borrar", Toast.LENGTH_SHORT).show()
+            } else {
+                dlg.dismiss()
+                confirmDeleteMany(sel, reopen)
+            }
+        }
         dlg.listView.setOnItemLongClickListener { _, _, pos, _ ->
             confirmDeletePkg(files[pos], reopen)
             true
         }
+    }
+
+    /* Borra varios .pkg de una vez, con confirmacion */
+    private fun confirmDeleteMany(sel: List<java.io.File>, after: () -> Unit) {
+        val total = sel.sumOf { it.length() }
+        val lista = sel.take(8).joinToString("\n") { "• ${it.name}" } +
+            (if (sel.size > 8) "\n…y ${sel.size - 8} más" else "")
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("¿Borrar ${sel.size} archivos?")
+            .setMessage("$lista\n\nLiberas ${FtpUtil.sizeText(total)} de la carpeta Download del celular.")
+            .setPositiveButton("Borrar") { _, _ ->
+                var borrados = 0
+                for (f in sel) {
+                    val nombre = f.name
+                    if (f.delete()) {
+                        borrados++
+                        if ((prefs.getString("usbPkg", "") ?: "") == nombre) {
+                            prefs.edit().putString("usbPkg", "").apply()
+                            usbBtn.label.text = "Instalar por USB"
+                        }
+                    } else {
+                        log("No pude borrar $nombre.")
+                    }
+                }
+                log("Borrados $borrados de ${sel.size} archivos.")
+                after()
+            }
+            .setNegativeButton("Cancelar") { _, _ -> after() }
+            .show()
     }
 
     private fun chooseUsbPkg() {
@@ -1027,6 +1075,33 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             W.applyStyle(this, btnSend, 0)
             resetStage()
         }, { chooseWifiPkgs() }, PICK_PKG)
+    }
+
+    /* Borra varios .pkg marcados de una sola vez, con confirmacion */
+    private fun confirmDeleteMany(sel: List<java.io.File>, after: () -> Unit) {
+        val total = sel.sumOf { it.length() }
+        val lista = sel.joinToString("\n") { "• ${it.name}" }
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("¿Borrar ${sel.size} archivo(s)?")
+            .setMessage("$lista\n\nTotal: ${FtpUtil.sizeText(total)}. Se borran de la carpeta Download del celular.")
+            .setPositiveButton("Borrar") { _, _ ->
+                var borrados = 0
+                for (f in sel) {
+                    if (f.delete()) {
+                        borrados++
+                        if ((prefs.getString("usbPkg", "") ?: "") == f.name) {
+                            prefs.edit().putString("usbPkg", "").apply()
+                            usbBtn.label.text = "Instalar por USB"
+                        }
+                    } else {
+                        log("No pude borrar ${f.name}.")
+                    }
+                }
+                log("Borrados: $borrados de ${sel.size}")
+                after()
+            }
+            .setNegativeButton("Cancelar") { _, _ -> after() }
+            .show()
     }
 
     private fun confirmDeletePkg(f: java.io.File, after: () -> Unit) {
