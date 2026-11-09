@@ -1077,33 +1077,6 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         }, { chooseWifiPkgs() }, PICK_PKG)
     }
 
-    /* Borra varios .pkg marcados de una sola vez, con confirmacion */
-    private fun confirmDeleteMany(sel: List<java.io.File>, after: () -> Unit) {
-        val total = sel.sumOf { it.length() }
-        val lista = sel.joinToString("\n") { "• ${it.name}" }
-        AlertDialog.Builder(this, dlgTheme)
-            .setTitle("¿Borrar ${sel.size} archivo(s)?")
-            .setMessage("$lista\n\nTotal: ${FtpUtil.sizeText(total)}. Se borran de la carpeta Download del celular.")
-            .setPositiveButton("Borrar") { _, _ ->
-                var borrados = 0
-                for (f in sel) {
-                    if (f.delete()) {
-                        borrados++
-                        if ((prefs.getString("usbPkg", "") ?: "") == f.name) {
-                            prefs.edit().putString("usbPkg", "").apply()
-                            usbBtn.label.text = "Instalar por USB"
-                        }
-                    } else {
-                        log("No pude borrar ${f.name}.")
-                    }
-                }
-                log("Borrados: $borrados de ${sel.size}")
-                after()
-            }
-            .setNegativeButton("Cancelar") { _, _ -> after() }
-            .show()
-    }
-
     private fun confirmDeletePkg(f: java.io.File, after: () -> Unit) {
         AlertDialog.Builder(this, dlgTheme)
             .setTitle("¿Borrar este archivo?")
