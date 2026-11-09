@@ -99,6 +99,9 @@ private lateinit var btnScan: UiBtn
 private lateinit var usbBtn: UiBtn
 private var pendingUsb = false
 private val usbQueue = ArrayList<String>()
+private var payloadChecked = false
+private val PAYLOAD_REPO = "blurarv1991-crypto/ps4-payload"
+private lateinit var wifiProgress: android.widget.ProgressBar
 private lateinit var usbProgress: android.widget.ProgressBar
 private lateinit var usbProgressText: TextView
 private lateinit var payloadBtn: UiBtn
@@ -343,7 +346,7 @@ private fun deleteRemote(h: HistoryItem) {
 
         pkgTitle = W.centered(this, "Selecciona un archivo .pkg", 17f, Ui.TEXT).apply { typeface = Typeface.DEFAULT_BOLD }
         pkgSub = W.centered(this, "El archivo se enviará directamente a tu PS4.", 13f, Ui.MUTED)
-        val btnPick = W.button(this, "Elegir archivo .pkg", IconView.FOLDER_OPEN, 1) { pick(PICK_PKG) }
+        val btnPick = W.button(this, "Elegir archivo .pkg", IconView.FOLDER_OPEN, 1) { chooseWifiPkgs() }
         btnSend = W.button(this, "Enviar a la PS4", IconView.SEND, 2) { sendPkg() }
         btnCancelPkg = cancelButton()
         pkgSection = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -409,7 +412,10 @@ btnPayload.root.setOnLongClickListener {
 }
 payloadBtn = btnPayload
 val usbSel = prefs.getString("usbPkg", "") ?: ""
-val btnUsb = W.button(this, if (usbSel.isEmpty()) "Instalar por USB" else "Instalar por USB: $usbSel", IconView.SEND, 0) { startUsbInstall() }
+val btnUsb = W.button(this, if (usbSel.isEmpty()) "Instalar por USB" else "Instalar por USB: $usbSel", IconView.SEND, 0) {
+    payloadChecked = false
+    startUsbInstall()
+}
 btnUsb.root.setOnLongClickListener {
     showUsbMenu()
     true
@@ -433,7 +439,17 @@ usbBtn = btnUsb
         form.addView(btnPayload.root, wrap())
         form.addView(tabsRow, wrap())
         form.addView(stage, wrap())
+        wifiProgress = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = 0
+            isIndeterminate = true
+            visibility = View.GONE
+            progressTintList = android.content.res.ColorStateList.valueOf(Ui.BLUE_SOFT)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Ui.LINE)
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(Ui.BLUE_SOFT)
+        }
         form.addView(progressView, wrap())
+        form.addView(wifiProgress, LinearLayout.LayoutParams(MATCH_PARENT, dp(10)).apply { topMargin = dp(4); bottomMargin = dp(2) })
         form.addView(pkgSection, wrap())
         form.addView(ftpSection, wrap())
         form.addView(logBox, wrap())
@@ -536,6 +552,12 @@ usbBtn = btnUsb
     private fun setProgress(msg: String) {
     ui.post {
         progressView.text = msg
+        val m = Regex("(\\d{1,3})\\s?%").find(msg)
+        if (m != null) {
+            val pc = m.groupValues[1].toInt().coerceIn(0, 100)
+            wifiProgress.isIndeterminate = false
+            wifiProgress.progress = pc * 10
+        }
         val now = System.currentTimeMillis()
         if (busy && now - lastNotif > 2000) {
             lastNotif = now
@@ -546,6 +568,8 @@ usbBtn = btnUsb
 
 private fun begin(text: String) {
     setBusy(true)
+    wifiProgress.isIndeterminate = true
+    wifiProgress.visibility = View.VISIBLE
     notif(text)
     tMode = TransferView.SENDING
     transfer.setMode(TransferView.SENDING)
@@ -556,6 +580,8 @@ private fun begin(text: String) {
 private fun finish(code: Int, text: String) {
     ui.post {
         setBusy(false)
+        wifiProgress.visibility = View.GONE
+        if (code == TransferView.SUCCESS) notifyDone("Instalación terminada", text)
         TransferService.stop(this)
         tMode = code
         transfer.setMode(code)
@@ -865,6 +891,11 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             chooseUsbPkg()
             return
         }
+        if (prefs.getBoolean("autoPayload", true) && !payloadChecked) {
+            payloadChecked = true
+            downloadLatestPayload(true)
+            return
+        }
         val us = prefs.getString("usbElfUri", "") ?: ""
         val ok = us.isNotEmpty() && (try {
             contentResolver.openInputStream(Uri.parse(us))?.use { true } ?: false
@@ -894,66 +925,111 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
         if (pendingUsb) startUsbInstall()
     }
 
-    /* Lista propia con solo los .pkg de Download (necesita el permiso de acceso a todos los archivos, Android 11+) */
-    private fun chooseUsbPkg() {
-        if (android.os.Build.VERSION.SDK_INT < 30) {
-            pick(PICK_USB)
-            return
-        }
-        if (!android.os.Environment.isExternalStorageManager()) {
-            log("Para ver solo los .pkg, activa \"Permitir acceso a todos los archivos\" para PS4 Send y vuelve a tocar el botón.")
-            try {
-                startActivity(
-                    Intent(
-                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
+    /* 0 = permiso concedido, 1 = se abrió la pantalla de ajustes, 2 = no disponible (Android 10 o anterior) */
+    private fun allFilesAccess(): Int {
+        if (android.os.Build.VERSION.SDK_INT < 30) return 2
+        if (android.os.Environment.isExternalStorageManager()) return 0
+        log("Para ver solo los .pkg, activa \"Permitir acceso a todos los archivos\" para PS4 Send y vuelve a tocar el botón.")
+        try {
+            startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:$packageName")
                 )
-            } catch (e: Exception) {
-                try {
-                    startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                } catch (e2: Exception) {
-                    pick(PICK_USB)
-                }
+            )
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (e2: Exception) {
+                return 2
             }
-            return
         }
+        return 1
+    }
+
+    private fun downloadPkgs(): List<java.io.File> {
         val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-        val files = (dir.listFiles() ?: emptyArray<java.io.File>())
+        return (dir.listFiles() ?: emptyArray<java.io.File>())
             .filter { it.isFile && it.name.lowercase().endsWith(".pkg") }
             .sortedByDescending { it.lastModified() }
-        if (files.isEmpty()) {
-            log("No hay archivos .pkg en la carpeta Download. Elige uno a mano.")
-            pick(PICK_USB)
-            return
-        }
+    }
+
+    /* Ventana con casillas: solo .pkg, mantener pulsado para borrar */
+    private fun showPkgDialog(
+        files: List<java.io.File>,
+        positive: String,
+        onPick: (List<java.io.File>) -> Unit,
+        reopen: () -> Unit,
+        fallbackCode: Int
+    ) {
         val nombres = files.map { "${it.name}\n${FtpUtil.sizeText(it.length())}" }.toTypedArray()
         val marcados = BooleanArray(files.size)
         val dlg = AlertDialog.Builder(this, dlgTheme)
             .setTitle("Marca los .pkg (mantén pulsado para borrar)")
             .setMultiChoiceItems(nombres, marcados) { _, i, on -> marcados[i] = on }
-            .setPositiveButton("Instalar") { _, _ ->
-                val sel = files.filterIndexed { i, _ -> marcados[i] }.map { it.name }
-                if (sel.isEmpty()) {
-                    log("No marcaste ningún .pkg.")
-                } else {
-                    usbQueue.clear()
-                    usbQueue.addAll(sel)
-                    pendingUsb = true
-                    setUsbPkg(sel[0])
-                }
+            .setPositiveButton(positive) { _, _ ->
+                val sel = files.filterIndexed { i, _ -> marcados[i] }
+                if (sel.isEmpty()) log("No marcaste ningún .pkg.") else onPick(sel)
             }
             .setNegativeButton("Cerrar", null)
-            .setNeutralButton("Otra carpeta") { _, _ -> pick(PICK_USB) }
+            .setNeutralButton("Otra carpeta") { _, _ -> pick(fallbackCode) }
             .create()
         dlg.show()
         dlg.listView.setOnItemLongClickListener { _, _, pos, _ ->
-            confirmDeletePkg(files[pos])
+            confirmDeletePkg(files[pos], reopen)
             true
         }
     }
 
-    private fun confirmDeletePkg(f: java.io.File) {
+    private fun chooseUsbPkg() {
+        val a = allFilesAccess()
+        if (a == 1) return
+        if (a == 2) {
+            pick(PICK_USB)
+            return
+        }
+        val files = downloadPkgs()
+        if (files.isEmpty()) {
+            log("No hay archivos .pkg en la carpeta Download. Elige uno a mano.")
+            pick(PICK_USB)
+            return
+        }
+        showPkgDialog(files, "Instalar", { sel ->
+            usbQueue.clear()
+            usbQueue.addAll(sel.map { it.name })
+            pendingUsb = true
+            payloadChecked = false
+            setUsbPkg(sel[0].name)
+        }, { chooseUsbPkg() }, PICK_USB)
+    }
+
+    private fun chooseWifiPkgs() {
+        if (busy) {
+            log("Ya hay un envío en curso.")
+            return
+        }
+        val a = allFilesAccess()
+        if (a == 1) return
+        if (a == 2) {
+            pick(PICK_PKG)
+            return
+        }
+        val files = downloadPkgs()
+        if (files.isEmpty()) {
+            log("No hay archivos .pkg en la carpeta Download. Elige uno a mano.")
+            pick(PICK_PKG)
+            return
+        }
+        showPkgDialog(files, "Elegir", { sel ->
+            pkgQ = sel.map { QItem(Uri.fromFile(it), it.name, it.length()) }
+            pkgTitle.text = if (sel.size == 1) sel[0].name else "${sel.size} archivos .pkg"
+            pkgSub.text = "${FtpUtil.sizeText(sel.sumOf { it.length() })} · listo para enviar"
+            W.applyStyle(this, btnSend, 0)
+            resetStage()
+        }, { chooseWifiPkgs() }, PICK_PKG)
+    }
+
+    private fun confirmDeletePkg(f: java.io.File, after: () -> Unit) {
         AlertDialog.Builder(this, dlgTheme)
             .setTitle("¿Borrar este archivo?")
             .setMessage("${f.name}\n${FtpUtil.sizeText(f.length())}\n\nSe borra de la carpeta Download del celular.")
@@ -968,10 +1044,55 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                 } else {
                     log("No pude borrar ${f.name}.")
                 }
-                chooseUsbPkg()
+                after()
             }
-            .setNegativeButton("Cancelar") { _, _ -> chooseUsbPkg() }
+            .setNegativeButton("Cancelar") { _, _ -> after() }
             .show()
+    }
+
+    /* Descarga el .elf de la ultima Release del repo del payload (si no hay, se usa el guardado) */
+    private fun downloadLatestPayload(thenInstall: Boolean) {
+        log("Buscando el último payload en GitHub...")
+        thread {
+            var msg = ""
+            try {
+                val c = java.net.URL("https://api.github.com/repos/$PAYLOAD_REPO/releases/latest").openConnection() as java.net.HttpURLConnection
+                c.setRequestProperty("Accept", "application/vnd.github+json")
+                c.connectTimeout = 10000
+                c.readTimeout = 15000
+                if (c.responseCode != 200) {
+                    msg = "GitHub no tiene una Release publicada todavía (código ${c.responseCode}). Uso el payload guardado."
+                } else {
+                    val body = c.inputStream.bufferedReader().readText()
+                    val assets = org.json.JSONObject(body).getJSONArray("assets")
+                    var url = ""
+                    var nombre = ""
+                    for (k in 0 until assets.length()) {
+                        val a = assets.getJSONObject(k)
+                        val n = a.getString("name")
+                        if (n.lowercase().endsWith(".elf")) {
+                            url = a.getString("browser_download_url")
+                            nombre = n
+                            break
+                        }
+                    }
+                    if (url.isEmpty()) {
+                        msg = "La Release no trae ningún .elf. Uso el payload guardado."
+                    } else {
+                        val f = java.io.File(filesDir, nombre)
+                        java.net.URL(url).openStream().use { inp -> f.outputStream().use { out -> inp.copyTo(out) } }
+                        prefs.edit().putString("usbElfUri", Uri.fromFile(f).toString()).putString("usbElfName", nombre).apply()
+                        msg = "Payload actualizado: $nombre (${f.length() / 1024} KB)"
+                    }
+                }
+            } catch (e: Exception) {
+                msg = "No pude consultar GitHub (${e.message}). Uso el payload guardado."
+            }
+            ui.post {
+                log(msg)
+                if (thenInstall) startUsbInstall()
+            }
+        }
     }
 
     /* Aviso en el celular cuando termina (o se interrumpe) una instalación */
@@ -1067,7 +1188,15 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
     }
 
     private fun showUsbMenu() {
-        val opciones = arrayOf("Elegir .pkg e instalar", "Cambiar el payload (.elf)", "Ver historial USB", "Quitar el .pkg elegido")
+        val auto = prefs.getBoolean("autoPayload", true)
+        val opciones = arrayOf(
+            "Elegir .pkg e instalar",
+            "Cambiar el payload (.elf)",
+            "Descargar el último payload ahora",
+            "Descarga automática del payload: ${if (auto) "sí" else "no"}",
+            "Ver historial USB",
+            "Quitar el .pkg elegido"
+        )
         AlertDialog.Builder(this, dlgTheme)
             .setTitle("Instalar por USB")
             .setItems(opciones) { _, which ->
@@ -1080,7 +1209,15 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                         pendingUsb = false
                         pick(PICK_USB_ELF)
                     }
-                    2 -> showUsbHistory()
+                    2 -> {
+                        pendingUsb = false
+                        downloadLatestPayload(false)
+                    }
+                    3 -> {
+                        prefs.edit().putBoolean("autoPayload", !auto).apply()
+                        log("Descarga automática del payload: ${if (!auto) "activada" else "desactivada"}")
+                    }
+                    4 -> showUsbHistory()
                     else -> {
                         pendingUsb = false
                         usbQueue.clear()
@@ -1139,6 +1276,16 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                                 tFin = System.currentTimeMillis()
                             }
                             ui.post { showUsbProgress(hecho, total, mbs) }
+                        }
+                    } else if (ln.startsWith("L|")) {
+                        val parts = ln.split("|")
+                        if (parts.size >= 3) {
+                            val libre = parts[1].toLongOrNull() ?: 0L
+                            val juego = parts[2].toLongOrNull() ?: 0L
+                            ui.post {
+                                log("Espacio libre en la PS4: ${FtpUtil.sizeText(libre)} (el juego pesa ${FtpUtil.sizeText(juego)})")
+                                if (libre < juego) log("Atención: puede que no quepa en la PS4.")
+                            }
                         }
                     } else if (ln.isNotBlank()) {
                         ui.post { log("PS4: $ln") }
