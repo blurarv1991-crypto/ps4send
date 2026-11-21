@@ -411,6 +411,7 @@ btnPayload.root.setOnLongClickListener {
     true
 }
 payloadBtn = btnPayload
+val btnUrl = W.button(this, "Descargar por enlace", IconView.SEND, 1) { askUrl() }
 val usbSel = prefs.getString("usbPkg", "") ?: ""
 val btnUsb = W.button(this, if (usbSel.isEmpty()) "Instalar por USB" else "Instalar por USB: $usbSel", IconView.SEND, 0) {
     payloadChecked = false
@@ -437,6 +438,7 @@ usbBtn = btnUsb
         form.addView(usbProgress, LinearLayout.LayoutParams(MATCH_PARENT, dp(10)).apply { topMargin = dp(4); bottomMargin = dp(2) })
         form.addView(usbProgressText, wrap())
         form.addView(btnPayload.root, wrap())
+        form.addView(btnUrl.root, wrap())
         form.addView(tabsRow, wrap())
         form.addView(stage, wrap())
         wifiProgress = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -1347,6 +1349,57 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             val avg = if (seg > 0L) totalB / 1000000L / seg else 0L
             ui.post { onUsbEnd(nombre, completo, totalB, avg) }
         }
+    }
+
+    /* Pegas un enlace directo a un .pkg y la PS4 lo descarga sola, sin pasar por el celular */
+    private fun askUrl() {
+        var inicial = prefs.getString("lastUrl", "") ?: ""
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val pegado = cm.primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: ""
+            if (pegado.startsWith("http://") || pegado.startsWith("https://")) inicial = pegado
+        } catch (e: Exception) {
+        }
+        val input = W.field(this, "http://servidor/juego.pkg", inicial, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        val holder = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        holder.addView(input, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("Enlace directo del .pkg")
+            .setView(holder)
+            .setPositiveButton("Descargar en la PS4") { _, _ -> sendUrl(input.text.toString()) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun sendUrl(raw: String) {
+        val url = raw.trim()
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            log("El enlace debe empezar con http:// o https://")
+            return
+        }
+        val host = statusCard.ip.trim()
+        if (host.isEmpty()) {
+            log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
+            return
+        }
+        prefs.edit().putString("lastUrl", url).apply()
+        if (!url.lowercase().substringBefore('?').endsWith(".pkg")) {
+            log("Aviso: el enlace no termina en .pkg. Si no es un enlace directo, la PS4 no podrá descargarlo.")
+        }
+        if (url.startsWith("https://")) {
+            log("Aviso: si la PS4 rechaza el https, prueba con la versión http:// del enlace.")
+        }
+        log("Enviando el enlace a Remote Package Installer...")
+        UrlInstall.send(host, url, { m -> log(m) }, { ok, msg ->
+            ui.post {
+                log(msg)
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                if (ok) notifyDone("Enlace enviado a la PS4", url.substringAfterLast('/').substringBefore('?'))
+            }
+        })
     }
 
     private fun copyIp() {
