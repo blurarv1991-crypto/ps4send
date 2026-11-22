@@ -39,7 +39,7 @@ class MainActivity : Activity() {
     }
 
     private val ui = Handler(Looper.getMainLooper())
-    private val store by lazy { StoreScreen(this, ui, { u -> sendUrl(u) }, { u -> sendBridge(u) }) }
+    private val store by lazy { StoreScreen(this, ui, { u -> sendUrl(u) }, { u, a -> sendBridge(u, a) }, { u, cb -> openWeb(u, cb) }) }
     private val prefs by lazy { getSharedPreferences("ps4send", MODE_PRIVATE) }
     private val browser = FtpBrowser(this, ui) { m -> log(m) }
 
@@ -1408,7 +1408,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
     }
 
     /* Modo puente: el celular sigue el enlace y se lo pasa a la PS4 sin guardar el .pkg */
-    private fun sendBridge(raw: String) {
+    private fun sendBridge(raw: String, auth: Bridge.Auth? = null) {
         val url = raw.trim()
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             log("El enlace debe empezar con http:// o https://")
@@ -1423,13 +1423,28 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             log("Ya hay un envío en curso.")
             return
         }
-        prefs.edit().putString("lastUrl", url).apply()
+        if (auth == null) prefs.edit().putString("lastUrl", url).apply()
         qStop = false
         begin("Preparando el puente...")
         Bridge.start(host, url, { m -> log(m) }, { t -> setProgress(t) }, { ok, msg ->
             ui.post { log(msg) }
             finish(if (ok) TransferView.SUCCESS else TransferView.IDLE, msg)
-        })
+            if (!ok && (msg.contains("página web") || msg.contains("403"))) ui.post { offerWeb(url) }
+        }, auth)
+    }
+
+    /* El enlace pide captcha o espera: se abre la página dentro de la app */
+    private fun offerWeb(url: String) {
+        AlertDialog.Builder(this, dlgTheme)
+            .setTitle("Este enlace necesita abrir la página")
+            .setMessage("Puede tener captcha o una espera. Ábrela, resuélvelo y toca Descargar: la descarga se enviará sola a la PS4.")
+            .setPositiveButton("Abrir página") { _, _ -> openWeb(url) { real, a -> sendBridge(real, a) } }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun openWeb(url: String, done: (String, Bridge.Auth) -> Unit) {
+        WebGrab(this).open(url, done)
     }
 
     private fun copyIp() {
