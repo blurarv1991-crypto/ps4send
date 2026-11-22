@@ -21,6 +21,10 @@ object Bridge {
     @Volatile private var stopped = false
     @Volatile private var total = 0L
     private val served = AtomicLong(0)
+    @Volatile private var finalUrl = ""
+    @Volatile private var lastUrl = ""
+    @Volatile private var logger: (String) -> Unit = { }
+    private val reqCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun stop() {
         stopped = true
@@ -45,6 +49,7 @@ object Bridge {
                 c.disconnect()
                 continue
             }
+            lastUrl = u
             return c
         }
         throw Exception("Demasiadas redirecciones")
@@ -53,6 +58,7 @@ object Bridge {
     /* Comprueba que el enlace entrega un archivo (no una página) y devuelve su tamaño */
     private fun probe(src: String): Long {
         val c = open(src, "bytes=0-0")
+        finalUrl = lastUrl
         val code = c.responseCode
         if (code != 200 && code != 206) {
             c.disconnect()
@@ -148,21 +154,70 @@ object Bridge {
             out.write(h.toString().toByteArray(Charsets.ISO_8859_1))
             out.flush()
             if (head) return
-            val c = open(src, "bytes=$start-$end")
+            val id = reqCount.incrementAndGet()
+            val verbose = id <= 8
+            if (verbose) logger("PS4 pidió #$id: ${FtpUtil.sizeText(start)} a ${FtpUtil.sizeText(end)} (${FtpUtil.sizeText(len)})")
+            s.tcpNoDelay = true
+            try { s.sendBufferSize = 1 shl 20 } catch (e: Exception) { }
+            val t1 = System.currentTimeMillis()
+            var c = try {
+                open(finalUrl.ifEmpty { src }, "bytes=$start-$end")
+            } catch (e: Exception) {
+                open(src, "bytes=$start-$end")
+            }
+            if (c.responseCode >= 400 && finalUrl.isNotEmpty()) {
+                c.disconnect()
+                c = open(src, "bytes=$start-$end")
+            }
+            val ttfb = System.currentTimeMillis() - t1
             val code = c.responseCode
             val ins = c.inputStream
             if (code == 200 && start > 0L) skipFully(ins, start)
-            val buf = ByteArray(65536)
-            var left = len
-            while (left > 0L && !stopped) {
-                val n = ins.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
-                if (n < 0) break
-                out.write(buf, 0, n)
-                left -= n
-                served.addAndGet(n.toLong())
+            val q = java.util.concurrent.ArrayBlockingQueue<ByteArray>(8)
+            val end0 = ByteArray(0)
+            val abort = java.util.concurrent.atomic.AtomicBoolean(false)
+            Thread {
+                try {
+                    var remain = len
+                    while (remain > 0L && !stopped && !abort.get()) {
+                        val want = minOf(262144L, remain).toInt()
+                        val b = ByteArray(want)
+                        var got = 0
+                        while (got < want) {
+                            val n = ins.read(b, got, want - got)
+                            if (n < 0) break
+                            got += n
+                        }
+                        if (got <= 0) break
+                        val blk = if (got == want) b else b.copyOf(got)
+                        while (!abort.get() && !stopped && !q.offer(blk, 500, TimeUnit.MILLISECONDS)) { }
+                        remain -= got
+                        if (got < want) break
+                    }
+                } catch (e: Exception) {
+                } finally {
+                    while (!abort.get() && !stopped && !q.offer(end0, 500, TimeUnit.MILLISECONDS)) { }
+                }
+            }.start()
+            var sent = 0L
+            val t2 = System.currentTimeMillis()
+            try {
+                while (!stopped) {
+                    val blk = q.poll(1, TimeUnit.SECONDS) ?: continue
+                    if (blk.isEmpty()) break
+                    out.write(blk)
+                    sent += blk.size
+                    served.addAndGet(blk.size.toLong())
+                }
+                out.flush()
+            } finally {
+                abort.set(true)
+                try { c.disconnect() } catch (e: Exception) { }
             }
-            out.flush()
-            c.disconnect()
+            if (verbose) {
+                val ms = maxOf(1L, System.currentTimeMillis() - t2)
+                logger("  #$id: ${FtpUtil.sizeText(sent)} en $ms ms (${sent / 1000L / ms} MB/s), el servidor tardó $ttfb ms en responder")
+            }
         } catch (e: Exception) {
         } finally {
             try { s.close() } catch (e: Exception) { }
@@ -171,6 +226,9 @@ object Bridge {
 
     fun start(host: String, src: String, log: (String) -> Unit, progress: (String) -> Unit, done: (Boolean, String) -> Unit) {
         stopped = false
+        logger = log
+        reqCount.set(0)
+        finalUrl = ""
         Thread {
             try {
                 log("Comprobando el enlace...")
