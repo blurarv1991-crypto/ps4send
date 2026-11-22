@@ -8,7 +8,7 @@ import java.nio.ByteOrder
 /* Lee nombre, ID y portada de un .pkg de PS4 pidiendo solo unos pocos bytes por HTTP (sin bajar el archivo) */
 object PkgInfo {
 
-    class Info(val title: String, val titleId: String, val size: Long, val icon: ByteArray?)
+    class Info(val title: String, val titleId: String, val size: Long, val icon: ByteArray?, val category: String, val version: String)
 
     private const val UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
 
@@ -93,11 +93,15 @@ object PkgInfo {
         }
         var title = ""
         var titleId = ""
+        var category = ""
+        var version = ""
         if (sfoOff >= 0L) {
             try {
                 val m = sfo(get(url, sfoOff, sfoSize).data)
                 title = m["TITLE"] ?: ""
                 titleId = m["TITLE_ID"] ?: ""
+                category = m["CATEGORY"] ?: ""
+                version = m["APP_VER"] ?: m["VERSION"] ?: ""
             } catch (e: Exception) {
             }
         }
@@ -109,7 +113,7 @@ object PkgInfo {
             } catch (e: Exception) {
             }
         }
-        return Info(title, titleId, h.total, icon)
+        return Info(title, titleId, h.total, icon, category, version)
     }
 
     private fun cstr(d: ByteArray, from: Int): String {
