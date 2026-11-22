@@ -15,7 +15,7 @@ object PkgInfo {
     private class Part(val data: ByteArray, val total: Long)
 
     /* Pide len bytes desde start, siguiendo redirecciones a mano */
-    private fun get(src: String, start: Long, len: Int): Part {
+    private fun get(src: String, start: Long, len: Int, auth: Bridge.Auth?): Part {
         var u = src
         for (i in 0..8) {
             val c = URL(u).openConnection() as HttpURLConnection
@@ -23,6 +23,11 @@ object PkgInfo {
             c.connectTimeout = 15000
             c.readTimeout = 20000
             c.setRequestProperty("User-Agent", UA)
+            if (auth != null && URL(u).host == auth.host) {
+                if (auth.ua.isNotEmpty()) c.setRequestProperty("User-Agent", auth.ua)
+                if (auth.cookie.isNotEmpty()) c.setRequestProperty("Cookie", auth.cookie)
+                if (auth.referer.isNotEmpty()) c.setRequestProperty("Referer", auth.referer)
+            }
             c.setRequestProperty("Range", "bytes=$start-${start + len - 1L}")
             val code = c.responseCode
             if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
@@ -62,15 +67,15 @@ object PkgInfo {
         throw Exception("Demasiadas redirecciones")
     }
 
-    fun read(url: String): Info {
-        val h = get(url, 0L, 0x40)
+    fun read(url: String, auth: Bridge.Auth? = null): Info {
+        val h = get(url, 0L, 0x40, auth)
         if (h.data.size < 0x20) throw Exception("Archivo demasiado corto")
         val hb = ByteBuffer.wrap(h.data)
         if (hb.getInt(0) != 0x7F434E54) throw Exception("No parece un .pkg de PS4")
         val count = hb.getInt(0x10)
         val tableOff = hb.getInt(0x18).toLong() and 0xFFFFFFFFL
         if (count <= 0 || count > 4096) throw Exception("Cabecera de .pkg no válida")
-        val t = get(url, tableOff, count * 32)
+        val t = get(url, tableOff, count * 32, auth)
         val tb = ByteBuffer.wrap(t.data)
         var sfoOff = -1L
         var sfoSize = 0
@@ -97,7 +102,7 @@ object PkgInfo {
         var version = ""
         if (sfoOff >= 0L) {
             try {
-                val m = sfo(get(url, sfoOff, sfoSize).data)
+                val m = sfo(get(url, sfoOff, sfoSize, auth).data)
                 title = m["TITLE"] ?: ""
                 titleId = m["TITLE_ID"] ?: ""
                 category = m["CATEGORY"] ?: ""
@@ -108,7 +113,7 @@ object PkgInfo {
         var icon: ByteArray? = null
         if (iconOff >= 0L) {
             try {
-                val d = get(url, iconOff, iconSize).data
+                val d = get(url, iconOff, iconSize, auth).data
                 if (d.size > 8 && d[1] == 'P'.code.toByte() && d[2] == 'N'.code.toByte() && d[3] == 'G'.code.toByte()) icon = d
             } catch (e: Exception) {
             }
