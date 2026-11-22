@@ -39,6 +39,7 @@ class MainActivity : Activity() {
     }
 
     private val ui = Handler(Looper.getMainLooper())
+    private val store by lazy { StoreScreen(this, ui, { u -> sendUrl(u) }, { u -> sendBridge(u) }) }
     private val prefs by lazy { getSharedPreferences("ps4send", MODE_PRIVATE) }
     private val browser = FtpBrowser(this, ui) { m -> log(m) }
 
@@ -412,6 +413,7 @@ btnPayload.root.setOnLongClickListener {
 }
 payloadBtn = btnPayload
 val btnUrl = W.button(this, "Descargar por enlace", IconView.SEND, 1) { askUrl() }
+val btnStore = W.button(this, "Tienda de enlaces", IconView.CUBE, 1) { store.show() }
 val usbSel = prefs.getString("usbPkg", "") ?: ""
 val btnUsb = W.button(this, if (usbSel.isEmpty()) "Instalar por USB" else "Instalar por USB: $usbSel", IconView.SEND, 0) {
     payloadChecked = false
@@ -439,6 +441,7 @@ usbBtn = btnUsb
         form.addView(usbProgressText, wrap())
         form.addView(btnPayload.root, wrap())
         form.addView(btnUrl.root, wrap())
+        form.addView(btnStore.root, wrap())
         form.addView(tabsRow, wrap())
         form.addView(stage, wrap())
         wifiProgress = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
