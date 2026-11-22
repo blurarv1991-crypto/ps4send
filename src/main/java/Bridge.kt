@@ -21,6 +21,7 @@ object Bridge {
     @Volatile private var stopped = false
     @Volatile private var total = 0L
     private val served = AtomicLong(0)
+    private val upSem = java.util.concurrent.Semaphore(6)
     @Volatile private var finalUrl = ""
     @Volatile private var lastUrl = ""
     @Volatile private var logger: (String) -> Unit = { }
@@ -110,6 +111,44 @@ object Bridge {
         }
     }
 
+    /* Baja un trozo [s0, e0] del enlace completo en memoria (con 3 intentos) */
+    private fun fetchSeg(src: String, s0: Long, e0: Long): ByteArray {
+        val want = (e0 - s0 + 1L).toInt()
+        var last: Exception? = null
+        for (attempt in 0..2) {
+            upSem.acquire()
+            try {
+                val range = "bytes=$s0-$e0"
+                var c = try {
+                    open(finalUrl.ifEmpty { src }, range)
+                } catch (e: Exception) {
+                    open(src, range)
+                }
+                if (c.responseCode >= 400 && finalUrl.isNotEmpty()) {
+                    c.disconnect()
+                    c = open(src, range)
+                }
+                val ins = c.inputStream
+                if (c.responseCode == 200 && s0 > 0L) skipFully(ins, s0)
+                val b = ByteArray(want)
+                var got = 0
+                while (got < want) {
+                    val n = ins.read(b, got, want - got)
+                    if (n < 0) throw Exception("Se cortó la descarga")
+                    got += n
+                }
+                c.disconnect()
+                return b
+            } catch (e: Exception) {
+                last = e
+            } finally {
+                upSem.release()
+            }
+            if (stopped) break
+        }
+        throw last ?: Exception("No pude bajar un trozo")
+    }
+
     private fun serve(s: Socket, src: String) {
         try {
             s.soTimeout = 60000
@@ -159,64 +198,37 @@ object Bridge {
             if (verbose) logger("PS4 pidió #$id: ${FtpUtil.sizeText(start)} a ${FtpUtil.sizeText(end)} (${FtpUtil.sizeText(len)})")
             s.tcpNoDelay = true
             try { s.sendBufferSize = 1 shl 20 } catch (e: Exception) { }
-            val t1 = System.currentTimeMillis()
-            var c = try {
-                open(finalUrl.ifEmpty { src }, "bytes=$start-$end")
-            } catch (e: Exception) {
-                open(src, "bytes=$start-$end")
-            }
-            if (c.responseCode >= 400 && finalUrl.isNotEmpty()) {
-                c.disconnect()
-                c = open(src, "bytes=$start-$end")
-            }
-            val ttfb = System.currentTimeMillis() - t1
-            val code = c.responseCode
-            val ins = c.inputStream
-            if (code == 200 && start > 0L) skipFully(ins, start)
-            val q = java.util.concurrent.ArrayBlockingQueue<ByteArray>(8)
-            val end0 = ByteArray(0)
-            val abort = java.util.concurrent.atomic.AtomicBoolean(false)
-            Thread {
-                try {
-                    var remain = len
-                    while (remain > 0L && !stopped && !abort.get()) {
-                        val want = minOf(262144L, remain).toInt()
-                        val b = ByteArray(want)
-                        var got = 0
-                        while (got < want) {
-                            val n = ins.read(b, got, want - got)
-                            if (n < 0) break
-                            got += n
-                        }
-                        if (got <= 0) break
-                        val blk = if (got == want) b else b.copyOf(got)
-                        while (!abort.get() && !stopped && !q.offer(blk, 500, TimeUnit.MILLISECONDS)) { }
-                        remain -= got
-                        if (got < want) break
-                    }
-                } catch (e: Exception) {
-                } finally {
-                    while (!abort.get() && !stopped && !q.offer(end0, 500, TimeUnit.MILLISECONDS)) { }
-                }
-            }.start()
+            val seg = 4L * 1024L * 1024L
+            val nSeg = ((len + seg - 1L) / seg).toInt()
+            val futs = arrayOfNulls<java.util.concurrent.Future<ByteArray>>(nSeg)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
             var sent = 0L
             val t2 = System.currentTimeMillis()
             try {
-                while (!stopped) {
-                    val blk = q.poll(1, TimeUnit.SECONDS) ?: continue
-                    if (blk.isEmpty()) break
+                var next = 0
+                var i = 0
+                while (i < nSeg && !stopped) {
+                    while (next < nSeg && next < i + 5) {
+                        val k = next
+                        val s0 = start + k * seg
+                        val e0 = minOf(end, s0 + seg - 1L)
+                        futs[k] = pool.submit(java.util.concurrent.Callable { fetchSeg(src, s0, e0) })
+                        next++
+                    }
+                    val blk = futs[i]!!.get()
+                    futs[i] = null
                     out.write(blk)
                     sent += blk.size
                     served.addAndGet(blk.size.toLong())
+                    i++
                 }
                 out.flush()
             } finally {
-                abort.set(true)
-                try { c.disconnect() } catch (e: Exception) { }
+                pool.shutdownNow()
             }
             if (verbose) {
                 val ms = maxOf(1L, System.currentTimeMillis() - t2)
-                logger("  #$id: ${FtpUtil.sizeText(sent)} en $ms ms (${sent / 1000L / ms} MB/s), el servidor tardó $ttfb ms en responder")
+                logger("  #$id: ${FtpUtil.sizeText(sent)} en $ms ms (${sent / 1000L / ms} MB/s)")
             }
         } catch (e: Exception) {
         } finally {
