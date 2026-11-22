@@ -30,7 +30,8 @@ class StoreScreen(
     private val act: Activity,
     private val ui: Handler,
     private val onDirect: (String) -> Unit,
-    private val onBridge: (String) -> Unit
+    private val onBridge: (String, Bridge.Auth?) -> Unit,
+    private val onWeb: (String, (String, Bridge.Auth) -> Unit) -> Unit
 ) {
 
     private class Item(val url: String) {
@@ -44,7 +45,13 @@ class StoreScreen(
         var ver = ""
         var group = ""
         var rev = 0
+        var real = ""
+        var cookie = ""
+        var ua = ""
+        var ref = ""
     }
+
+    private class Act(val label: String, val run: () -> Unit)
 
     private val prefs = act.getSharedPreferences("ps4send", Context.MODE_PRIVATE)
     private val items = ArrayList<Item>()
@@ -79,6 +86,10 @@ class StoreScreen(
                 item.ver = o.optString("ver", "")
                 item.group = o.optString("group", "")
                 item.rev = o.optInt("rev", 0)
+                item.real = o.optString("real", "")
+                item.cookie = o.optString("cookie", "")
+                item.ua = o.optString("ua", "")
+                item.ref = o.optString("ref", "")
                 items.add(item)
             }
         } catch (e: Exception) {
@@ -101,9 +112,34 @@ class StoreScreen(
                     .put("ver", x.ver)
                     .put("group", x.group)
                     .put("rev", x.rev)
+                    .put("real", x.real)
+                    .put("cookie", x.cookie)
+                    .put("ua", x.ua)
+                    .put("ref", x.ref)
             )
         }
         prefs.edit().putString("storeItems", a.toString()).apply()
+    }
+
+    /* Cookies del navegador con el que se resolvió el captcha (solo si ya se resolvió) */
+    private fun authOf(item: Item): Bridge.Auth? {
+        if (item.real.isEmpty()) return null
+        val host = try { java.net.URL(item.real).host } catch (e: Exception) { "" }
+        return Bridge.Auth(host, item.cookie, item.ref, item.ua)
+    }
+
+    /* Abre la página para resolver el captcha; al empezar la descarga, la manda sola a la PS4 */
+    private fun resolve(item: Item) {
+        onWeb(item.url) { real, a ->
+            item.real = real
+            item.cookie = a.cookie
+            item.ua = a.ua
+            item.ref = a.referer
+            save()
+            fetch(item)
+            dlg?.dismiss()
+            onBridge(real, a)
+        }
     }
 
     /* Lee nombre, ID y portada del .pkg en segundo plano */
@@ -112,7 +148,7 @@ class StoreScreen(
         item.err = ""
         pool.execute {
             try {
-                val info = PkgInfo.read(item.url)
+                val info = PkgInfo.read(item.real.ifEmpty { item.url }, authOf(item))
                 var cover = ""
                 val ic = info.icon
                 if (ic != null) {
@@ -349,7 +385,9 @@ class StoreScreen(
             TextView(act).apply {
                 textSize = 12f
                 if (okCount == 0 && failed > 0) {
-                    text = "No pude leer los datos: ${pk[0].err}"
+                    val e0 = pk[0].err
+                    val pista = if (e0.contains("página web") || e0.contains("403")) "\nToca y elige \"Abrir página\" para resolver el captcha." else ""
+                    text = "No pude leer los datos: " + e0 + pista
                     setTextColor(Ui.RED)
                 } else if (okCount == 0) {
                     text = "Leyendo datos..."
@@ -386,46 +424,40 @@ class StoreScreen(
     }
 
     private fun options(item: Item) {
-        val ops = arrayOf(
-            "Descargar en la PS4 (directo, enlaces http)",
-            "Descargar en la PS4 por el celular (puente)",
-            "Actualizar datos",
-            "Copiar enlace",
-            "Quitar de la lista"
-        )
+        val acts = ArrayList<Act>()
+        if (item.real.isEmpty()) {
+            acts.add(Act("Descargar en la PS4 (directo, enlaces http)") {
+                dlg?.dismiss()
+                onDirect(item.url)
+            })
+        }
+        acts.add(Act("Descargar en la PS4 por el celular (puente)") {
+            dlg?.dismiss()
+            onBridge(item.real.ifEmpty { item.url }, authOf(item))
+        })
+        acts.add(Act("Abrir página y resolver captcha") { resolve(item) })
+        acts.add(Act("Actualizar datos") {
+            fetch(item)
+            save()
+            refresh()
+        })
+        acts.add(Act("Copiar enlace") {
+            val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("enlace", item.url))
+            Toast.makeText(act, "Enlace copiado", Toast.LENGTH_SHORT).show()
+        })
+        acts.add(Act("Quitar de la lista") {
+            items.remove(item)
+            if (item.cover.isNotEmpty()) {
+                File(act.filesDir, item.cover).delete()
+                bmps.remove(item.cover)
+            }
+            save()
+            refresh()
+        })
         AlertDialog.Builder(act, dlgTheme)
             .setTitle(pkgLabel(item))
-            .setItems(ops) { _, which ->
-                when (which) {
-                    0 -> {
-                        dlg?.dismiss()
-                        onDirect(item.url)
-                    }
-                    1 -> {
-                        dlg?.dismiss()
-                        onBridge(item.url)
-                    }
-                    2 -> {
-                        fetch(item)
-                        save()
-                        refresh()
-                    }
-                    3 -> {
-                        val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("enlace", item.url))
-                        Toast.makeText(act, "Enlace copiado", Toast.LENGTH_SHORT).show()
-                    }
-                    else -> {
-                        items.remove(item)
-                        if (item.cover.isNotEmpty()) {
-                            File(act.filesDir, item.cover).delete()
-                            bmps.remove(item.cover)
-                        }
-                        save()
-                        refresh()
-                    }
-                }
-            }
+            .setItems(acts.map { it.label }.toTypedArray()) { _, which -> acts[which].run() }
             .show()
     }
 
