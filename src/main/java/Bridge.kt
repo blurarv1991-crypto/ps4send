@@ -17,6 +17,10 @@ object Bridge {
 
     private const val UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
 
+    /* Datos del navegador con el que se resolvió el captcha: se envían solo al mismo servidor */
+    class Auth(val host: String, val cookie: String, val referer: String, val ua: String)
+
+    @Volatile private var session: Auth? = null
     @Volatile private var server: ServerSocket? = null
     @Volatile private var stopped = false
     @Volatile private var total = 0L
@@ -42,6 +46,12 @@ object Bridge {
             c.connectTimeout = 15000
             c.readTimeout = 30000
             c.setRequestProperty("User-Agent", UA)
+            val a = session
+            if (a != null && URL(u).host == a.host) {
+                if (a.ua.isNotEmpty()) c.setRequestProperty("User-Agent", a.ua)
+                if (a.cookie.isNotEmpty()) c.setRequestProperty("Cookie", a.cookie)
+                if (a.referer.isNotEmpty()) c.setRequestProperty("Referer", a.referer)
+            }
             if (range != null) c.setRequestProperty("Range", range)
             val code = c.responseCode
             if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
@@ -236,8 +246,9 @@ object Bridge {
         }
     }
 
-    fun start(host: String, src: String, log: (String) -> Unit, progress: (String) -> Unit, done: (Boolean, String) -> Unit) {
+    fun start(host: String, src: String, log: (String) -> Unit, progress: (String) -> Unit, done: (Boolean, String) -> Unit, auth: Auth? = null) {
         stopped = false
+        session = auth
         logger = log
         reqCount.set(0)
         finalUrl = ""
