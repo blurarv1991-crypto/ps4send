@@ -594,6 +594,7 @@ private fun finish(code: Int, text: String) {
 
 private fun cancelAll() {
     qStop = true
+    Bridge.stop()
     sender?.cancel()
     uploader?.cancel()
 }
@@ -1370,6 +1371,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
             .setTitle("Enlace directo del .pkg")
             .setView(holder)
             .setPositiveButton("Descargar en la PS4") { _, _ -> sendUrl(input.text.toString()) }
+            .setNeutralButton("Por el celular (puente)") { _, _ -> sendBridge(input.text.toString()) }
             .setNegativeButton("Cancelar", null)
             .show()
     }
@@ -1399,6 +1401,31 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 if (ok) notifyDone("Enlace enviado a la PS4", url.substringAfterLast('/').substringBefore('?'))
             }
+        })
+    }
+
+    /* Modo puente: el celular sigue el enlace y se lo pasa a la PS4 sin guardar el .pkg */
+    private fun sendBridge(raw: String) {
+        val url = raw.trim()
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            log("El enlace debe empezar con http:// o https://")
+            return
+        }
+        val host = statusCard.ip.trim()
+        if (host.isEmpty()) {
+            log("Escribe la IP de la PS4 (toca la tarjeta de arriba).")
+            return
+        }
+        if (busy) {
+            log("Ya hay un envío en curso.")
+            return
+        }
+        prefs.edit().putString("lastUrl", url).apply()
+        qStop = false
+        begin("Preparando el puente...")
+        Bridge.start(host, url, { m -> log(m) }, { t -> setProgress(t) }, { ok, msg ->
+            ui.post { log(msg) }
+            finish(if (ok) TransferView.SUCCESS else TransferView.IDLE, msg)
         })
     }
 
